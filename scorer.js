@@ -47,8 +47,20 @@
       lookahead: 3,
       refOffsets: r >= 0.99 ? [-7, -5, -3, -1] : [-3, -2, -1],
       trackKeep: Math.max(12, Math.round(40 * r)),
+      // a ball lost for a few frames (camera jolt, blur) is re-linked to its old track
+      relinkGap: Math.max(3, Math.round(8 * r)),
+      // camera shake searched per frame (SIG px): hand jolts are bigger between 60 fps frames
+      maxShake: MAX_SHAKE / Math.min(1, Math.max(r, 0.25)),
+      // motion sensors (estimated picture slide, working px per frame):
+      //  - a jolt (bump or tap on the phone) blocks scoring for a short hold-off;
+      //  - noticeable movement around an impact makes the measurer demand that the
+      //    target changed clearly more than its surroundings (a real hit shakes the paper).
+      sensorVeto: 20,
+      sensorHold: Math.max(3, Math.round(24 * r)),
+      sensorMoving: 4,
     };
     p.buffer = p.lookahead - p.refOffsets[0] + 2;
+    p.histKeep = p.buffer + 4;
     return p;
   }
 
@@ -261,34 +273,49 @@
   // Per-frame: tracking and impact candidates (same logic as the Python reference)
   // =========================================================================
   class Tracker {
-    constructor(keep) { this.tracks = new Map(); this.next = 0; this.keep = keep; }
+    /** keep: frames of history; relinkGap: frames a lost ball may be re-linked over;
+     * camAt(j): camera motion [dx, dy] of frame j relative to j-1 (working px). */
+    constructor(keep, relinkGap, camAt) {
+      this.tracks = new Map(); this.next = 0; this.keep = keep; this.relinkGap = relinkGap; this.camAt = camAt;
+    }
+    predict(t, i) {
+      const [lx, ly] = t.pts.get(t.last);
+      let f0 = -Infinity;
+      for (const f of t.pts.keys()) if (f < t.last && f > f0) f0 = f;
+      let vx = 0, vy = 0;
+      if (f0 > -Infinity) {
+        const p0 = t.pts.get(f0);
+        vx = (lx - p0[0]) / (t.last - f0); vy = (ly - p0[1]) / (t.last - f0);
+      }
+      let cx = 0, cy = 0; // follow the camera
+      for (let j = t.last + 1; j <= i; j++) { const c = this.camAt(j); cx += c[0]; cy += c[1]; }
+      return { x: lx + vx * (i - t.last) + cx, y: ly + vy * (i - t.last) + cy, v: Math.hypot(vx, vy) };
+    }
     update(i, blobs) {
-      const cand = [];
-      for (const t of this.tracks.values()) {
-        if (i - t.last > 2) continue;
-        const [lx, ly] = t.pts.get(t.last);
-        let f0 = -Infinity;
-        for (const f of t.pts.keys()) if (f < t.last && f > f0) f0 = f;
-        let vx = 0, vy = 0;
-        if (f0 > -Infinity) {
-          const p0 = t.pts.get(f0);
-          vx = (lx - p0[0]) / (t.last - f0); vy = (ly - p0[1]) / (t.last - f0);
-        }
-        const px = lx + vx * (i - t.last), py = ly + vy * (i - t.last);
-        const gate = Math.max(TRACK_GATE, 1.6 * Math.hypot(vx, vy));
-        blobs.forEach((b, j) => {
-          const d = Math.hypot(b.x - px, b.y - py);
-          if (d < gate) cand.push([d, t.id, j]);
-        });
-      }
-      cand.sort((a, b) => a[0] - b[0]);
       const usedT = new Set(), usedB = new Set();
-      for (const [, tid, j] of cand) {
-        if (usedT.has(tid) || usedB.has(j)) continue;
-        usedT.add(tid); usedB.add(j);
-        const t = this.tracks.get(tid), b = blobs[j];
-        t.pts.set(i, [b.x, b.y, b.area]); t.last = i; b.track = tid;
-      }
+      const assign = (maxGap, gateOf) => {
+        const cand = [];
+        for (const t of this.tracks.values()) {
+          const gap = i - t.last;
+          if (gap < 1 || gap > maxGap || usedT.has(t.id)) continue;
+          const p = this.predict(t, i), gate = gateOf(p.v, gap);
+          blobs.forEach((b, j) => {
+            if (usedB.has(j)) return;
+            const d = Math.hypot(b.x - p.x, b.y - p.y);
+            if (d < gate) cand.push([d, t.id, j]);
+          });
+        }
+        cand.sort((x, y) => x[0] - y[0]);
+        for (const [, tid, j] of cand) {
+          if (usedT.has(tid) || usedB.has(j)) continue;
+          usedT.add(tid); usedB.add(j);
+          const t = this.tracks.get(tid), b = blobs[j];
+          t.pts.set(i, [b.x, b.y, b.area]); t.last = i; b.track = tid;
+        }
+      };
+      assign(2, (v) => Math.max(TRACK_GATE, 1.6 * v));
+      // second chance for balls lost over a few frames, with a wider gate
+      assign(this.relinkGap, (v, gap) => Math.max(1.6 * TRACK_GATE, 1.6 * v * Math.min(gap, 3)));
       blobs.forEach((b, j) => {
         if (usedB.has(j)) return;
         const t = { id: this.next++, start: i, last: i, pts: new Map([[i, [b.x, b.y, b.area]]]) };
@@ -344,6 +371,7 @@
         if (dt === 1 && tr.pts.has(f + 1)) {
           const nx = tr.pts.get(f + 1);
           x = 2 * x - nx[0]; y = 2 * y - nx[1];
+          if (x < 0 || y < 0 || x >= W || y >= H) { x = b.x; y = b.y; } // implausible step back
         }
         const edge = Math.min(b.x, b.y, W - b.x, H - b.y) < EDGE_MARGIN;
         out.push({ x, y, f: dt === 1 ? t : f, dt, track: tr.id, age, brk, area: b.area, edge });
@@ -373,17 +401,22 @@
      * (240 for iPhone slo-mo, ~60 for a live web camera); clip: [startSec, endSec] or null;
      * lut: ball colour bitset (Uint8Array, 2 MiB).
      */
-    constructor({ fps = 30, captureFps = 240, clip = null, lut }) {
+    constructor({ fps = 30, captureFps = 240, clip = null, lut, off = {} }) {
       if (!lut) throw new Error('ShotScorer needs the ball colour LUT');
       this.fps = fps;
       this.P = FrameParams(captureFps);
+      // test switches
+      if (off.relink) this.P.relinkGap = 2;
       this.clip = clip;
       this.lut = lut;
       this.i = -1;
       this.W = 0; this.H = 0;
       this.frames = new Map(); this.blobs = new Map(); this.shift = new Map(); this.diff = new Map();
       this.quiet = new RunningQuantile();
-      this.tracker = new Tracker(this.P.trackKeep);
+      this.tracker = new Tracker(this.P.trackKeep, this.P.relinkGap, (j) => this.shift.get(j) || [0, 0]);
+      this.motion = new Map();
+      this.lastMoving = -1e9;
+      this.vetoed = 0;
       this.pending = [];
       this.lastSpike = -1e9;
       this.finder = null;
@@ -392,8 +425,14 @@
     }
 
     /** Push one RGBA frame at working resolution. Returns measurement jobs that became ready. */
-    push(rgba, width, height) {
+    /** meta.motionPx: camera motion from the phone's motion sensors, as the estimated
+     * image slide in working px for this frame (omit when there are no sensors). */
+    push(rgba, width, height, meta) {
       const i = ++this.i, P = this.P;
+      if (meta && Number.isFinite(meta.motionPx)) {
+        this.motion.set(i, meta.motionPx);
+        if (meta.motionPx > P.sensorVeto) this.lastMoving = i;
+      }
       if (Math.min(width, height) !== WORK_SHORT) throw new Error(`frames must have short side ${WORK_SHORT}px`);
       if (!this.finder || this.W !== width || this.H !== height) {
         this.W = width; this.H = height;
@@ -401,9 +440,6 @@
         this.prevGray = null;
       }
       this.frames.set(i, rgba);
-      const bl = this.finder.find(rgba);
-      this.tracker.update(i, bl);
-      this.blobs.set(i, bl);
 
       // camera shake + residual (shake-compensated) difference on a half-size grey image
       const hw = width >> 1, hh = height >> 1;
@@ -413,9 +449,10 @@
       if (!this.prevGray) {
         this.shift.set(i, [0, 0]); this.diff.set(i, 0);
       } else {
-        let dx = shift1d(this.prevProf.col, prof.col, DIFF_MARGIN, hw - DIFF_MARGIN, MAX_SHAKE);
-        let dy = shift1d(this.prevProf.row, prof.row, DIFF_MARGIN, hh - DIFF_MARGIN, MAX_SHAKE);
-        if (dx === null || dy === null || Math.hypot(dx, dy) > MAX_SHAKE) { dx = 0; dy = 0; }
+        const ms = Math.round(P.maxShake);
+        let dx = shift1d(this.prevProf.col, prof.col, DIFF_MARGIN, hw - DIFF_MARGIN, ms);
+        let dy = shift1d(this.prevProf.row, prof.row, DIFF_MARGIN, hh - DIFF_MARGIN, ms);
+        if (dx === null || dy === null || Math.hypot(dx, dy) > P.maxShake) { dx = 0; dy = 0; }
         if (Math.abs(dx) < 0.05 && Math.abs(dy) < 0.05) { dx = 0; dy = 0; }
         const d = shiftedDiff(this.prevGray, gray, hw, hh, dx, dy, DIFF_MARGIN);
         this.diff.set(i, d);
@@ -425,19 +462,23 @@
       this.prevGray = gray; this.prevProf = prof;
       this.lastDiff = this.diff.get(i);
 
+      const bl = this.finder.find(rgba);
+      this.tracker.update(i, bl);
+      this.blobs.set(i, bl);
+
       if (this.isSpike(i)) {
         this.lastSpike = i;
         const tsec = i / this.fps;
-        if (!this.clip || (this.clip[0] <= tsec && tsec <= this.clip[1])) this.pending.push(i);
+        if (i - this.lastMoving <= P.sensorHold) this.vetoed++; // the camera moved, not the paper
+        else if (!this.clip || (this.clip[0] <= tsec && tsec <= this.clip[1])) this.pending.push(i);
       }
       const out = [];
       while (this.pending.length && this.pending[0] + P.lookahead <= i) {
         const job = this.makeJob(this.pending.shift());
         if (job) out.push(job);
       }
-      for (const mp of [this.frames, this.blobs, this.shift, this.diff]) {
-        for (const k of mp.keys()) if (k <= i - P.buffer) mp.delete(k);
-      }
+      for (const mp of [this.frames, this.diff]) for (const k of mp.keys()) if (k <= i - P.buffer) mp.delete(k);
+      for (const mp of [this.blobs, this.shift, this.motion]) for (const k of mp.keys()) if (k <= i - P.histKeep) mp.delete(k);
       return out;
     }
 
@@ -459,6 +500,7 @@
     /** Everything the Measurer needs for the impact at frame t (self-contained, transferable). */
     makeJob(t) {
       const P = this.P;
+      if (this.lastMoving >= t - 1) { this.vetoed++; return null; } // phone jolted around the impact
       const cands = impactCandidates(t, this.blobs, this.tracker.tracks, this.W, this.H, P);
       if (!cands.length) return null; // paper motion without a newly arrived ball
       const base = t - 1;
@@ -476,7 +518,10 @@
       }
       if (!refs.length) return null;
       const cur = this.frames.get(t);
-      return { t, time: t / this.fps, W: this.W, H: this.H, settled, cands, refs, cur: cur ? cur.slice() : null };
+      let sensor = null; // strongest phone movement around the impact, if sensors report
+      for (let k = t - 3; k <= t + 1; k++) if (this.motion.has(k)) sensor = Math.max(sensor || 0, this.motion.get(k));
+      return { t, time: t / this.fps, W: this.W, H: this.H, settled, cands, refs, cur: cur ? cur.slice() : null,
+        moving: sensor !== null && sensor > P.sensorMoving };
     }
   }
 
@@ -599,8 +644,8 @@
 
     function roiDarkness(ref, cx, cy, R) {
       const H = ref.rows, W = ref.cols, m = 1.5 * R;
-      const x0 = Math.max(0, Math.trunc(cx - m)), y0 = Math.max(0, Math.trunc(cy - m));
-      const x1 = Math.min(W, Math.trunc(cx + m)), y1 = Math.min(H, Math.trunc(cy + m));
+      const x0 = Math.min(Math.max(0, Math.trunc(cx - m)), W - 8), y0 = Math.min(Math.max(0, Math.trunc(cy - m)), H - 8);
+      const x1 = Math.max(Math.min(W, Math.trunc(cx + m)), x0 + 8), y1 = Math.max(Math.min(H, Math.trunc(cy + m)), y0 + 8);
       const roi = ref.roi(new cv.Rect(x0, y0, x1 - x0, y1 - y0));
       const crop = roi.clone(); roi.delete();
       const dk = darknessMap(crop, 2 * R / 7);
@@ -726,6 +771,7 @@
     }
 
     function cropPadded(img, x, y, half, pad) {
+      x = Math.min(Math.max(x, 0), img.cols - 1); y = Math.min(Math.max(y, 0), img.rows - 1);
       const big = new cv.Mat();
       cv.copyMakeBorder(img, big, pad, pad, pad, pad, cv.BORDER_REPLICATE, new cv.Scalar());
       const roi = big.roi(new cv.Rect(x + pad - half, y + pad - half, 2 * half + 1, 2 * half + 1));
@@ -759,6 +805,57 @@
       const out = [[(bi % res.cols) - (res.cols - 1) / 2, Math.floor(bi / res.cols) - (res.rows - 1) / 2], mx];
       del(tpl, area, res, mask);
       return out;
+    }
+
+    /** Did the target change more than its surroundings between the frame before impact
+     * and the impact frame? Camera motion (estimated from the background around the target)
+     * is compensated first. A real hit shakes the paper; a camera jiggle changes everything.
+     * Returns {din, dout, nout, sx, sy} (mean grey change inside the target / around it). */
+    function motionCheck(prevRgb, curRgb, cx, cy, R) {
+      const sc = 0.25, S = 8;
+      const g = [prevRgb, curRgb].map((m) => {
+        const sm = new cv.Mat(), gr = new cv.Mat(), f = new cv.Mat();
+        cv.resize(m, sm, new cv.Size(0, 0), sc, sc, cv.INTER_AREA);
+        cv.cvtColor(sm, gr, cv.COLOR_RGB2GRAY);
+        gr.convertTo(f, cv.CV_32F);
+        sm.delete(); gr.delete();
+        return f;
+      });
+      const [g1, g2] = g, W = g1.cols, H = g1.rows, cs = cx * sc, ys = cy * sc, Rs = R * sc;
+      // camera translation from the background only (target masked out)
+      const tpl = g1.roi(new cv.Rect(S, S, W - 2 * S, H - 2 * S));
+      const mask = new cv.Mat(H - 2 * S, W - 2 * S, cv.CV_32F);
+      const mk = mask.data32F;
+      let nbg = 0;
+      for (let y = 0; y < H - 2 * S; y++) for (let x = 0; x < W - 2 * S; x++) {
+        const on = Math.hypot(x + S - cs, y + S - ys) > 1.25 * Rs;
+        mk[y * (W - 2 * S) + x] = on ? 1 : 0; if (on) nbg++;
+      }
+      let sx = 0, sy = 0;
+      if (nbg > 400) {
+        const res = new cv.Mat();
+        cv.matchTemplate(g2, tpl, res, cv.TM_SQDIFF, mask);
+        const d = res.data32F;
+        let bi = 0;
+        for (let k = 1; k < d.length; k++) if (d[k] < d[bi]) bi = k;
+        sx = (bi % res.cols) - S; sy = Math.floor(bi / res.cols) - S;
+        res.delete();
+      }
+      tpl.delete(); mask.delete();
+      const a = g1.data32F, b = g2.data32F;
+      let si = 0, ni = 0, so = 0, no = 0;
+      for (let y = 0; y < H; y++) {
+        const py = y - sy;
+        if (py < 0 || py >= H) continue;
+        for (let x = 0; x < W; x++) {
+          const px = x - sx;
+          if (px < 0 || px >= W) continue;
+          const r = Math.hypot(x - cs, y - ys) / Rs, dv = Math.abs(b[y * W + x] - a[py * W + px]);
+          if (r < 1) { si += dv; ni++; } else if (r > 1.3 && r < 2.6) { so += dv; no++; }
+        }
+      }
+      g1.delete(); g2.delete();
+      return { din: ni ? si / ni : 0, dout: no ? so / no : 0, nout: no, sx: sx / sc, sy: sy / sc };
     }
 
     /** Clean view of the target just before impact: median of the job's aligned frames. */
@@ -817,6 +914,14 @@
             const [D, corr] = paperDisplacement(ref, cur, c.x, c.y, R, Math.sqrt(c.area / Math.PI));
             if (D && corr >= 0.45 && Math.hypot(D[0], D[1]) <= 1.3 * R / 7) { bx = c.x - D[0]; by = c.y - D[1]; }
           }
+          let motion = null;
+          if (cur) {
+            const prev = rgbFromRgba(job.refs[job.refs.length - 1].rgba, job.W, job.H);
+            try { motion = motionCheck(prev, cur, cx, cy, R); } finally { prev.delete(); }
+          }
+          // the phone moved: only a target that changed clearly more than its surroundings
+          // (after following the camera) is a hit; otherwise it was the camera
+          if (job.moving && motion && motion.nout > 400 && motion.din < 1.4 * (motion.dout + 0.5)) return null;
           const rp = Math.hypot(bx - cx, by - cy);
           const zr = zoneAlongRay(dk, cx, cy, bx, by, R);
           let zone = zr.zone, note;
@@ -825,6 +930,7 @@
             n: ++this.nShots, t: job.t, time: job.time, score: zone < 7 ? RING_SCORES[zone] : 0, zone,
             fit_q: zr.q, settled: job.settled, center: [cx, cy], R, target_conf: conf,
             ball: [c.x, c.y], impact: [bx, by], work: [job.W, job.H],
+            cand: { dt: c.dt, age: c.age, brk: c.brk, area: c.area }, motion,
           };
           if (note) shot.note = note;
           return shot;

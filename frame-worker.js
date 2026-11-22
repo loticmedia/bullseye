@@ -174,7 +174,7 @@ onmessage = async (e) => {
     } else if (msg.type === 'frame') {
       if (!scorer) return;
       const t0 = performance.now();
-      sendJobs(scorer.push(new Uint8Array(msg.buffer), msg.width, msg.height));
+      sendJobs(scorer.push(new Uint8Array(msg.buffer), msg.width, msg.height, { motionPx: msg.motionPx }));
       postMessage({ type: 'frame-done', ms: performance.now() - t0 });
     } else if (msg.type === 'live-stop') {
       if (scorer) sendJobs(scorer.finish());

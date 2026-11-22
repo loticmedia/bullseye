@@ -133,6 +133,12 @@ button, .file, select {
 button:disabled, .file:has(input:disabled) { opacity: .45; }
 .status { color: var(--muted); font-size: 13px; margin: 8px 0; }
 
+.steady {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 4; pointer-events: none;
+  font-family: var(--display); font-size: 18px; letter-spacing: .05em; color: var(--ink); background: var(--z1);
+  padding: 10px 18px; border-radius: 999px; box-shadow: 0 6px 0 rgba(0, 0, 0, .4);
+}
+
 /* ----------------------------------------------------------------- HUD */
 .hud { display: none; }
 .live-dot::before {

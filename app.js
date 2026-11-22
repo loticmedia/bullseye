@@ -462,6 +462,45 @@ $('lens').onchange = async () => {
   if (live.running && !params.get('demo')) await openCamera($('lens').value);
 };
 
+// ---------------------------------------------------------- motion sensors
+// The gyroscope tells us when the phone itself moves, so camera jiggle is not mistaken
+// for the paper flapping on a hit. Converted to "how far the picture slides per frame".
+const sensors = {
+  enabled: false, peakDeg: 0, peakAcc: 0, movingUntil: 0,
+  /** Must run inside a tap handler: iOS asks the user once. */
+  request() {
+    const DME = window.DeviceMotionEvent;
+    if (!DME) return;
+    const listen = () => {
+      if (this.enabled) return;
+      this.enabled = true;
+      window.addEventListener('devicemotion', (e) => {
+        const r = e.rotationRate || {}, a = e.acceleration || {};
+        const pitchYaw = Math.hypot(r.beta || 0, r.gamma || 0), roll = Math.abs(r.alpha || 0);
+        this.peakDeg = Math.max(this.peakDeg, pitchYaw + 0.35 * roll); // deg/s
+        this.peakAcc = Math.max(this.peakAcc, Math.hypot(a.x || 0, a.y || 0, a.z || 0)); // m/s^2
+      });
+    };
+    if (typeof DME.requestPermission === 'function') {
+      DME.requestPermission().then((st) => { if (st === 'granted') listen(); }).catch(() => {});
+    } else {
+      listen();
+    }
+  },
+  /** Image slide (working px) since the last call, for one frame at `fps`. */
+  take(fps) {
+    if (!this.enabled) return undefined;
+    const lens = /tele/i.test($('lens').selectedOptions[0]?.textContent || '') ? 5
+      : /ultra/i.test($('lens').selectedOptions[0]?.textContent || '') ? 0.5 : 1;
+    const pxPerDeg = 12.5 * lens * zoom.value; // ~43° across the 540 px short side at 1x
+    let px = (this.peakDeg / Math.max(fps, 1)) * pxPerDeg;
+    if (this.peakAcc > 1.5) px = Math.max(px, 99); // a tap or bump on the phone
+    this.peakDeg = 0; this.peakAcc = 0;
+    if (px > 4) this.movingUntil = performance.now() + 400; // scorer's "phone moved" level
+    return px;
+  },
+};
+
 // ------------------------------------------------------------------- live
 async function openCamera(deviceId) {
   const base = { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 60, max: 60 } };
@@ -544,7 +583,9 @@ function grabFrame() {
   const img = live.ctx.getImageData(0, 0, live.w, live.h);
   live.outstanding++;
   live.frames++;
-  frameWorker.postMessage({ type: 'frame', buffer: img.data.buffer, width: live.w, height: live.h }, [img.data.buffer]);
+  const motionPx = sensors.take(live.captureFps);
+  frameWorker.postMessage({ type: 'frame', buffer: img.data.buffer, width: live.w, height: live.h, motionPx }, [img.data.buffer]);
+  $('steady').hidden = performance.now() > sensors.movingUntil;
 }
 function onVideoFrame() {
   if (!live.running) return;
@@ -561,6 +602,7 @@ function statusLoop() {
   if (!live.running) return;
   const sec = (performance.now() - live.t0) / 1000;
   setStatus(`Camera ${live.captureFps} fps · scoring ${(live.frames / sec).toFixed(0)} fps` +
+    (sensors.enabled ? ' · motion sensors on' : '') +
     ` · ${live.procMs.toFixed(1)} ms/frame${live.dropped ? ` · ${live.dropped} skipped` : ''}` +
     (zoom.native ? ' · lens zoom' : zoom.value > 1.001 ? ' · cropped zoom' : '') +
     (measureReady ? '' : ' · ring reader still loading'));
@@ -577,10 +619,11 @@ function stopLive() {
   $('zoom').disabled = true;
   live.wakeLock?.release?.();
   $('btn-live').textContent = 'Start';
+  $('steady').hidden = true;
   $('live-hint').hidden = false;
   setStatus('Stopped.');
 }
-$('btn-live').onclick = () => { sound.unlock(); return live.running ? stopLive() : startLive(); };
+$('btn-live').onclick = () => { sound.unlock(); if (!live.running) sensors.request(); return live.running ? stopLive() : startLive(); };
 $('btn-reset-live').onclick = () => {
   resetBoard();
   if (live.running) frameWorker.postMessage({ type: 'live-start', captureFps: live.captureFps });
