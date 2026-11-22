@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#111214">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <title>Bullseye</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Bullseye</h1>
+    <nav role="tablist">
+      <button role="tab" id="tab-live" aria-selected="true">Live</button>
+      <button role="tab" id="tab-clip" aria-selected="false">Slo-mo clip</button>
+    </nav>
+  </header>
+
+  <section id="board" aria-live="polite">
+    <div class="total"><span id="total">0</span><small>points</small></div>
+    <div class="stats">
+      <div><b id="shots">0</b><small>shots</small></div>
+      <div><b id="hits">0</b><small>on target</small></div>
+      <div><b id="last">–</b><small>last</small></div>
+    </div>
+  </section>
+
+  <main>
+    <section id="pane-live">
+      <div class="viewer">
+        <video id="video" playsinline muted></video>
+        <canvas id="overlay"></canvas>
+        <div id="live-hint" class="hint">Point the camera at the target and tap Start.<br>
+          Hold it steady (a tripod is best). Live scoring runs at 60 fps, so a shot can land
+          one ring off; score the slo-mo clip for the exact count.</div>
+      </div>
+      <div class="controls">
+        <button id="btn-live" class="primary" disabled>Start</button>
+        <button id="btn-reset-live">Reset</button>
+      </div>
+      <p class="status" id="live-status">Loading scorer…</p>
+    </section>
+
+    <section id="pane-clip" hidden>
+      <p class="lead">Record a round with the Camera app in <b>Slo-Mo</b>, then pick the clip here.
+        Every frame is scored on this phone, so this is the accurate count.
+        If the picker shows <b>Options</b>, choose the original/current format so the full frame rate is kept.</p>
+      <div class="controls">
+        <label class="primary file">Choose slo-mo video
+          <input id="file" type="file" accept="video/*" disabled>
+        </label>
+        <select id="rate" aria-label="Slo-mo capture rate">
+          <option value="240" selected>240 fps slo-mo</option>
+          <option value="120">120 fps slo-mo</option>
+        </select>
+      </div>
+      <div id="clip-progress" hidden>
+        <progress id="prog" max="1" value="0"></progress>
+        <div class="controls"><span id="clip-status" class="status"></span>
+          <button id="btn-cancel">Cancel</button></div>
+      </div>
+    </section>
+
+    <section id="list-wrap">
+      <h2>Shots</h2>
+      <ol id="list" reversed></ol>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
