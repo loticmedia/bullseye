@@ -35,8 +35,14 @@
         <video id="video" playsinline muted></video>
         <canvas id="overlay"></canvas>
         <div id="live-hint" class="hint">Point the camera at the target and tap Start.<br>
-          Hold it steady (a tripod is best). Live scoring runs at 60 fps, so a shot can land
-          one ring off; score the slo-mo clip for the exact count.</div>
+          Pinch or use the slider to zoom so the target fills the view. Hold it steady (a tripod
+          is best). Live scoring runs at 60 fps, so a shot can land one ring off; score the
+          slo-mo clip for the exact count.</div>
+      </div>
+      <div class="zoom-row">
+        <select id="lens" aria-label="Camera lens" hidden></select>
+        <input id="zoom" type="range" min="1" max="4" step="0.05" value="1" aria-label="Zoom" disabled>
+        <output id="zoom-val" for="zoom">1.0×</output>
       </div>
       <div class="controls">
         <button id="btn-live" class="primary" disabled>Start</button>
