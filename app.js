@@ -4,7 +4,9 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
-const ZONE_COLORS = ['#ffd400', '#ff8c00', '#ff5a36', '#e0457b', '#9b59ff', '#3d8bff', '#22c4c4', '#9aa0a6'];
+const css = getComputedStyle(document.documentElement);
+const ZONE_COLORS = [0, 1, 2, 3, 4, 5, 6, 7].map((k) => css.getPropertyValue('--z' + k).trim());
+const RING_POINTS = [100, 60, 50, 40, 30, 20, 10];
 const WORK_SHORT = 540;
 
 // Two workers: frame-worker (every frame, pure JS) hands impact jobs straight to
@@ -21,19 +23,72 @@ let mode = 'live';
 const clipRun = { active: false, jobsTotal: null, jobsDone: 0, info: '', ms: 0, cancelled: false };
 
 // ------------------------------------------------------------- scoreboard
-const board = { shots: [] };
+const board = { shots: [], shown: 0 };
 function resetBoard() {
   board.shots = [];
   $('list').innerHTML = '';
-  renderBoard();
+  renderBoard(true);
   drawOverlay();
 }
-function renderBoard() {
-  const s = board.shots;
-  $('total').textContent = s.reduce((a, x) => a + x.score, 0);
-  $('shots').textContent = s.length;
-  $('hits').textContent = s.filter((x) => x.score > 0).length;
-  $('last').textContent = s.length ? (s[s.length - 1].score || 'miss') : '–';
+function stats() {
+  const s = board.shots, hits = s.filter((x) => x.score > 0);
+  let streak = 0;
+  for (let i = s.length - 1; i >= 0 && s[i].score > 0; i--) streak++;
+  return {
+    total: s.reduce((a, x) => a + x.score, 0),
+    shots: s.length,
+    hitRate: s.length ? Math.round((100 * hits.length) / s.length) + '%' : '–',
+    best: hits.length ? Math.max(...hits.map((x) => x.score)) : '–',
+    streak,
+  };
+}
+/** Animated count-up of the score in every place it is shown. */
+function countTo(target, instant) {
+  const from = board.shown, els = [$('total'), $('hud-total')];
+  if (instant || from === target || matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    board.shown = target; els.forEach((e) => (e.textContent = target)); return;
+  }
+  const t0 = performance.now(), dur = 520;
+  els.forEach((e) => { e.classList.remove('bump'); void e.offsetWidth; e.classList.add('bump'); });
+  const step = (now) => {
+    const k = Math.min(1, (now - t0) / dur), v = Math.round(from + (target - from) * (1 - (1 - k) ** 3));
+    els.forEach((e) => (e.textContent = v));
+    if (k < 1) requestAnimationFrame(step); else board.shown = target;
+  };
+  requestAnimationFrame(step);
+}
+function renderBoard(instant) {
+  const st = stats();
+  countTo(st.total, instant);
+  $('shots').textContent = st.shots;
+  $('hitrate').textContent = st.hitRate;
+  $('best').textContent = st.best;
+  $('streak').textContent = st.streak;
+  $('hud-shots').textContent = st.shots;
+  $('hud-streak').textContent = st.streak;
+  // shot string: one chip per shot (newest last); a greyed ring key when empty
+  const str = $('string');
+  str.innerHTML = '';
+  if (!board.shots.length) {
+    RING_POINTS.forEach((p, z) => {
+      const li = document.createElement('li');
+      li.className = 'key'; li.textContent = p; li.style.background = ZONE_COLORS[z];
+      str.append(li);
+    });
+  } else {
+    for (const sh of board.shots) {
+      const li = document.createElement('li');
+      if (sh.score) { li.textContent = sh.score; li.style.background = ZONE_COLORS[sh.zone]; } else { li.className = 'miss'; li.textContent = '×'; }
+      str.append(li);
+    }
+    str.scrollLeft = str.scrollWidth;
+  }
+  const last = board.shots[board.shots.length - 1], hl = $('hud-last');
+  hl.textContent = last ? (last.score || 'MISS') : '';
+  hl.style.background = last ? (last.score ? ZONE_COLORS[last.zone] : 'var(--panel-hi)') : '';
+  hl.style.color = last && !last.score ? 'var(--z7)' : '';
+  $('list-count').textContent = board.shots.length ? `· ${board.shots.length}` : '';
+  $('list-empty').hidden = board.shots.length > 0;
 }
 function fmtTime(sec) {
   const m = Math.floor(sec / 60), r = sec - 60 * m;
@@ -45,21 +100,165 @@ function addShot(shot, thumb) {
   board.shots.push(shot);
   const li = document.createElement('li');
   if (!shot.score) li.className = 'miss';
+  const edge = document.createElement('span');
+  edge.className = 'edge';
+  edge.style.background = ZONE_COLORS[shot.score ? shot.zone : 7];
   const img = document.createElement('img');
-  img.alt = `shot ${shot.n}`;
-  if (thumb) img.src = URL.createObjectURL(thumb);
+  if (thumb) { img.src = URL.createObjectURL(thumb); img.alt = `Shot ${shot.n} on the target`; } else { img.alt = ''; }
   const meta = document.createElement('div');
   meta.className = 'meta';
-  meta.innerHTML = `<b>Shot ${shot.n}</b>${fmtTime(shot.time)}${shot.note ? ' · low confidence' : ''}`;
+  const ring = shot.score === 100 ? 'Bullseye' : shot.score ? `${ordinalRing(shot.zone)} ring` : 'Off the rings';
+  meta.innerHTML = `<b>Shot ${shot.n}</b>${ring} · ${fmtTime(shot.time)}${shot.note ? ' · low confidence' : ''}`;
   const pts = document.createElement('div');
   pts.className = 'pts';
   pts.textContent = shot.score || 'miss';
-  if (shot.score) pts.style.color = ZONE_COLORS[shot.zone];
-  li.append(img, meta, pts);
+  if (shot.score) pts.style.background = ZONE_COLORS[shot.zone];
+  li.append(edge, img, meta, pts);
   $('list').prepend(li);
   renderBoard();
+  const hl = $('hud-last'); hl.classList.remove('fresh'); void hl.offsetWidth; hl.classList.add('fresh');
   drawOverlay();
+  celebrate(shot);
 }
+function ordinalRing(zone) { return ['Centre', 'Inner', '2nd', '3rd', '4th', '5th', 'Outer'][zone] || 'Outer'; }
+
+// ------------------------------------------------------------ hit effects
+/** Working-frame coordinates -> CSS pixels inside the viewer (video is object-fit: contain). */
+function viewPoint(x, y, sh) {
+  const r = $('viewer').getBoundingClientRect();
+  const s = Math.min(r.width / live.w, r.height / live.h);
+  const ox = (r.width - live.w * s) / 2, oy = (r.height - live.h * s) / 2;
+  const k = (zoom.native ? 1 : zoom.value) / ((sh && sh.zoomAt) || 1);
+  return [ox + (live.w / 2 + (x - live.w / 2) * k) * s, oy + (live.h / 2 + (y - live.h / 2) * k) * s, s * k];
+}
+function pop(text, color, x, y, layer, cls) {
+  const el = document.createElement('div');
+  el.className = 'pop' + (cls ? ' ' + cls : '');
+  el.textContent = text;
+  el.style.setProperty('--c', color);
+  el.style.left = x + 'px'; el.style.top = y + 'px';
+  layer.append(el);
+  el.addEventListener('animationend', () => el.remove());
+}
+function celebrate(shot) {
+  const logo = $('logo'); logo.classList.remove('thunk'); void logo.getBoundingClientRect(); logo.classList.add('thunk');
+  sound.hit(shot.score);
+  const liveView = mode === 'live' && live.running && live.w;
+  let layer, x, y;
+  if (liveView) {
+    layer = $('pops');
+    [x, y] = viewPoint(shot.ball[0], shot.ball[1], shot);
+  } else {
+    layer = $('board');
+    const t = $('total').getBoundingClientRect(), b = layer.getBoundingClientRect();
+    x = t.left - b.left + t.width + 30; y = t.top - b.top + t.height / 2;
+  }
+  if (shot.score) pop('+' + shot.score, ZONE_COLORS[shot.zone], x, y, layer);
+  else pop('MISS', ZONE_COLORS[7], x, y, layer, 'miss');
+  if (shot.score === 100) {
+    const banner = document.createElement('div');
+    banner.className = 'banner'; banner.textContent = 'Bullseye!';
+    const host = liveView ? $('pops') : $('board');
+    host.append(banner);
+    banner.addEventListener('animationend', () => banner.remove());
+    confetti(liveView ? $('fx') : null, x, y);
+  }
+}
+
+/** Confetti in ring colours. Draws on the viewer's fx canvas, or a temporary full-page one. */
+function confetti(canvas, x0, y0) {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  let temp = null;
+  if (!canvas) {
+    temp = canvas = document.createElement('canvas');
+    Object.assign(canvas.style, { position: 'fixed', inset: '0', width: '100%', height: '100%', pointerEvents: 'none', zIndex: 50 });
+    document.body.append(canvas);
+    const b = $('total').getBoundingClientRect(); x0 = b.left + b.width / 2; y0 = b.top + b.height / 2;
+  }
+  const dpr = window.devicePixelRatio || 1, r = canvas.getBoundingClientRect();
+  canvas.width = r.width * dpr; canvas.height = r.height * dpr;
+  const ctx = canvas.getContext('2d');
+  const parts = Array.from({ length: 140 }, () => {
+    const a = Math.random() * Math.PI * 2, v = 4 + Math.random() * 9;
+    return { x: x0, y: y0, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 6, rot: Math.random() * 6, vr: (Math.random() - .5) * .5,
+      w: 5 + Math.random() * 6, h: 3 + Math.random() * 4, c: ZONE_COLORS[(Math.random() * 7) | 0] };
+  });
+  const t0 = performance.now();
+  const frame = (now) => {
+    const t = now - t0;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, r.width, r.height);
+    for (const p of parts) {
+      p.vy += 0.32; p.vx *= 0.985; p.x += p.vx; p.y += p.vy; p.rot += p.vr;
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot); ctx.globalAlpha = Math.max(0, 1 - t / 1800);
+      ctx.fillStyle = p.c; ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h); ctx.restore();
+    }
+    if (t < 1800) requestAnimationFrame(frame);
+    else { ctx.clearRect(0, 0, canvas.width, canvas.height); if (temp) temp.remove(); }
+  };
+  requestAnimationFrame(frame);
+}
+
+/** Small synthesised sound kit: paper "thwack" for a hit (brighter for better rings),
+ * a rising arpeggio for a bullseye, a low "bonk" for a miss. */
+const sound = {
+  on: (() => { try { return localStorage.getItem('sound') !== 'off'; } catch (e) { return true; } })(),
+  ctx: null,
+  unlock() {
+    if (!this.on) return;
+    try {
+      this.ctx = this.ctx || new (window.AudioContext || window.webkitAudioContext)();
+      if (this.ctx.state === 'suspended') this.ctx.resume();
+    } catch (e) { this.ctx = null; }
+  },
+  hit(score) {
+    if (!this.on || !this.ctx) return;
+    const c = this.ctx, t = c.currentTime;
+    const out = c.createGain(); out.gain.value = 0.55; out.connect(c.destination);
+    // thwack: band-passed noise burst + body thump
+    const len = Math.floor(c.sampleRate * 0.12), buf = c.createBuffer(1, len, c.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len) ** 3;
+    const noise = c.createBufferSource(); noise.buffer = buf;
+    const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = score ? 900 + score * 18 : 500; bp.Q.value = 1.4;
+    noise.connect(bp).connect(out); noise.start(t);
+    const thump = c.createOscillator(), tg = c.createGain();
+    thump.type = 'sine'; thump.frequency.setValueAtTime(score ? 180 : 140, t); thump.frequency.exponentialRampToValueAtTime(55, t + 0.18);
+    tg.gain.setValueAtTime(0.9, t); tg.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
+    thump.connect(tg).connect(out); thump.start(t); thump.stop(t + 0.25);
+    if (!score) { // bonk
+      const o = c.createOscillator(), g = c.createGain();
+      o.type = 'triangle'; o.frequency.setValueAtTime(220, t + 0.05); o.frequency.exponentialRampToValueAtTime(90, t + 0.35);
+      g.gain.setValueAtTime(0.35, t + 0.05); g.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+      o.connect(g).connect(out); o.start(t + 0.05); o.stop(t + 0.45);
+    }
+    const notes = score === 100 ? [523, 659, 784, 1047] : score >= 50 ? [659, 988] : score ? [587] : [];
+    notes.forEach((f, i) => {
+      const o = c.createOscillator(), g = c.createGain(), at = t + 0.08 + i * 0.09;
+      o.type = 'square'; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, at); g.gain.exponentialRampToValueAtTime(0.12, at + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, at + 0.16);
+      o.connect(g).connect(out); o.start(at); o.stop(at + 0.18);
+    });
+  },
+};
+$('btn-sound').setAttribute('aria-pressed', sound.on);
+$('btn-sound').onclick = () => {
+  sound.on = !sound.on;
+  try { localStorage.setItem('sound', sound.on ? 'on' : 'off'); } catch (e) { /* private mode */ }
+  $('btn-sound').setAttribute('aria-pressed', sound.on);
+  if (sound.on) { sound.unlock(); sound.hit(60); }
+};
+
+// ----------------------------------------------------------- overlay mode
+/** Full-screen camera with a big HUD scoreboard, score-coloured rings and hit markers. */
+function setOverlay(on) {
+  document.body.classList.toggle('overlay', on);
+  $('btn-overlay').setAttribute('aria-pressed', on);
+  try { localStorage.setItem('overlay', on ? 'on' : 'off'); } catch (e) { /* private mode */ }
+  requestAnimationFrame(drawOverlay);
+}
+$('btn-overlay').onclick = () => setOverlay(!document.body.classList.contains('overlay'));
+$('btn-exit-overlay').onclick = () => setOverlay(false);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && document.body.classList.contains('overlay')) setOverlay(false); });
 
 // ---------------------------------------------------------------- workers
 function setStatus(text) { $('live-status').textContent = text; }
@@ -91,7 +290,7 @@ frameWorker.onmessage = (e) => {
       $('clip-status').textContent = clipRun.info;
       break;
     case 'progress': {
-      $('prog').value = m.total ? m.done / m.total : 0;
+      $('prog-bar').style.width = (m.total ? (100 * m.done) / m.total : 0) + '%';
       const rate = m.done / Math.max(m.ms / 1000, 1e-3);
       const left = (m.total - m.done) / Math.max(rate, 1e-3);
       $('clip-status').textContent = `Frame ${m.done} / ${m.total} · ${rate.toFixed(0)} fps · ~${Math.ceil(left)} s left`;
@@ -140,8 +339,12 @@ function setMode(m) {
   $('tab-clip').setAttribute('aria-selected', m === 'clip');
   $('pane-live').hidden = m !== 'live';
   $('pane-clip').hidden = m !== 'clip';
+  // overlay mode belongs to the live camera; come back to it with the Live tab
+  if (m === 'clip') document.body.classList.remove('overlay');
+  else if (savedOverlay()) setOverlay(true);
   resetBoard();
 }
+function savedOverlay() { try { return localStorage.getItem('overlay') === 'on'; } catch (e) { return false; } }
 $('tab-live').onclick = () => setMode('live');
 $('tab-clip').onclick = () => setMode('clip');
 
@@ -377,13 +580,13 @@ function stopLive() {
   $('live-hint').hidden = false;
   setStatus('Stopped.');
 }
-$('btn-live').onclick = () => (live.running ? stopLive() : startLive());
+$('btn-live').onclick = () => { sound.unlock(); return live.running ? stopLive() : startLive(); };
 $('btn-reset-live').onclick = () => {
   resetBoard();
   if (live.running) frameWorker.postMessage({ type: 'live-start', captureFps: live.captureFps });
 };
 
-/** Target rings of the latest shot and every impact, over the live preview. */
+/** Overlay mode: tint the real target's rings in score colours and mark every hit. */
 function drawOverlay() {
   const cv = $('overlay');
   const rect = cv.getBoundingClientRect();
@@ -391,40 +594,43 @@ function drawOverlay() {
   cv.width = Math.round(rect.width * dpr); cv.height = Math.round(rect.height * dpr);
   const ctx = cv.getContext('2d');
   ctx.clearRect(0, 0, cv.width, cv.height);
-  if (mode !== 'live' || !board.shots.length || !live.w) return;
-  // map working coords -> canvas coords (video is object-fit: contain)
-  const s = Math.min(cv.width / live.w, cv.height / live.h);
-  const ox = (cv.width - live.w * s) / 2, oy = (cv.height - live.h * s) / 2;
-  // a shot measured at another (cropped) zoom level is rescaled about the frame centre
-  const zNow = zoom.native ? 1 : zoom.value;
-  const P = (x, y, sh) => {
-    const k = zNow / (sh.zoomAt || 1);
-    return [ox + (live.w / 2 + (x - live.w / 2) * k) * s, oy + (live.h / 2 + (y - live.h / 2) * k) * s];
-  };
+  if (mode !== 'live' || !document.body.classList.contains('overlay') || !board.shots.length || !live.w) return;
+  ctx.scale(dpr, dpr);
   const last = board.shots[board.shots.length - 1];
-  const [cx, cy] = P(last.center[0], last.center[1], last);
-  const rk = zNow / (last.zoomAt || 1);
-  ctx.strokeStyle = 'rgba(255,0,255,0.5)';
-  ctx.lineWidth = 1.5 * dpr;
-  for (let k = 1; k <= 7; k++) { ctx.beginPath(); ctx.arc(cx, cy, (last.R * k / 7) * s * rk, 0, 2 * Math.PI); ctx.stroke(); }
-  board.shots.forEach((sh, idx) => {
-    const [bx, by] = P(sh.ball[0], sh.ball[1], sh);
-    ctx.fillStyle = ZONE_COLORS[sh.zone] || '#fff';
-    ctx.globalAlpha = idx === board.shots.length - 1 ? 1 : 0.6;
-    ctx.beginPath(); ctx.arc(bx, by, (idx === board.shots.length - 1 ? 7 : 4) * dpr, 0, 2 * Math.PI); ctx.fill();
-  });
+  const [cx, cy, sc] = viewPoint(last.center[0], last.center[1], last);
+  const band = (last.R / 7) * sc;
+  for (let z = 6; z >= 0; z--) { // outer to inner translucent bands
+    ctx.beginPath(); ctx.arc(cx, cy, band * (z + 1), 0, 2 * Math.PI);
+    if (z > 0) ctx.arc(cx, cy, band * z, 0, 2 * Math.PI, true);
+    ctx.fillStyle = ZONE_COLORS[z]; ctx.globalAlpha = 0.16; ctx.fill('evenodd');
+    ctx.globalAlpha = 0.75; ctx.lineWidth = 1.5; ctx.strokeStyle = ZONE_COLORS[z];
+    ctx.beginPath(); ctx.arc(cx, cy, band * (z + 1), 0, 2 * Math.PI); ctx.stroke();
+  }
   ctx.globalAlpha = 1;
+  ctx.font = '13px Bungee, sans-serif'; ctx.textBaseline = 'middle';
+  board.shots.forEach((sh, i) => {
+    const [bx, by] = viewPoint(sh.ball[0], sh.ball[1], sh);
+    const latest = i === board.shots.length - 1, col = ZONE_COLORS[sh.score ? sh.zone : 7];
+    ctx.beginPath(); ctx.arc(bx, by, latest ? 9 : 6, 0, 2 * Math.PI);
+    ctx.fillStyle = col; ctx.fill();
+    ctx.lineWidth = 2.5; ctx.strokeStyle = '#1b1511'; ctx.stroke();
+    if (latest) { ctx.beginPath(); ctx.arc(bx, by, 15, 0, 2 * Math.PI); ctx.lineWidth = 2; ctx.strokeStyle = col; ctx.stroke(); }
+    const label = sh.score ? String(sh.score) : '×';
+    ctx.lineWidth = 4; ctx.strokeStyle = '#1b1511'; ctx.strokeText(label, bx + 12, by - 12);
+    ctx.fillStyle = '#f4ead6'; ctx.fillText(label, bx + 12, by - 12);
+  });
 }
 window.addEventListener('resize', drawOverlay);
 
 // ------------------------------------------------------------------- clip
 $('file').onchange = () => {
+  sound.unlock();
   const file = $('file').files[0];
   if (!file) return;
   resetBoard();
   $('clip-progress').hidden = false;
   $('btn-cancel').hidden = false;
-  $('prog').value = 0;
+  $('prog-bar').style.width = '0%';
   $('clip-status').textContent = 'Reading video…';
   $('file').disabled = true;
   Object.assign(clipRun, { active: true, jobsTotal: null, jobsDone: 0, cancelled: false });
@@ -437,3 +643,7 @@ $('btn-cancel').onclick = () => frameWorker.postMessage({ type: 'cancel' });
 if ('serviceWorker' in navigator && location.protocol === 'https:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
+
+// ------------------------------------------------------------------ start
+renderBoard(true);
+if (savedOverlay()) setOverlay(true);

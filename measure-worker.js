@@ -12,7 +12,7 @@
 importScripts('vendor/opencv.js', 'scorer.js');
 
 let Measurer = null, measurer = null;
-const ZONE_COLORS = ['#ffd400', '#ff8c00', '#ff5a36', '#e0457b', '#9b59ff', '#3d8bff', '#22c4c4', '#9aa0a6'];
+const ZONE_COLORS = ['#ffcf33', '#ff8f3a', '#f2545b', '#d561b8', '#8b78f6', '#45a6f5', '#33c3b0', '#8a7f72'];
 
 const ready = (async () => {
   let c = self.cv;

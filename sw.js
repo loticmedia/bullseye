@@ -1,8 +1,8 @@
 /* Offline cache: serve from cache for speed (OpenCV.js is 10 MB), refresh it in the
  * background so a new version shows up on the next visit. */
-const CACHE = 'bullseye-v2';
+const CACHE = 'bullseye-v3';
 const FILES = ['./', 'index.html', 'style.css', 'app.js', 'frame-worker.js', 'measure-worker.js', 'scorer.js',
-  'ball_lut.bin', 'vendor/opencv.js', 'vendor/mp4box.all.min.js', 'manifest.webmanifest', 'icon.svg'];
+  'ball_lut.bin', 'vendor/opencv.js', 'vendor/mp4box.all.min.js', 'vendor/bungee-latin.woff2', 'manifest.webmanifest', 'icon.svg'];
 self.addEventListener('install', (e) => e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting())));
 self.addEventListener('activate', (e) => e.waitUntil(
   caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim())));

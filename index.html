@@ -5,75 +5,129 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="theme-color" content="#111214">
+  <meta name="theme-color" content="#15110e">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="preload" href="vendor/bungee-latin.woff2" as="font" type="font/woff2" crossorigin>
   <title>Bullseye</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header>
-    <h1>Bullseye</h1>
-    <nav role="tablist">
+  <header class="topbar">
+    <div class="brand">
+      <svg id="logo" class="logo" viewBox="0 0 40 40" aria-hidden="true">
+        <circle cx="20" cy="20" r="18" fill="var(--paper)"/>
+        <circle cx="20" cy="20" r="15" fill="none" stroke="var(--ink)" stroke-width="3"/>
+        <circle cx="20" cy="20" r="9" fill="none" stroke="var(--ink)" stroke-width="3"/>
+        <circle cx="20" cy="20" r="3.5" fill="var(--ink)"/>
+        <circle class="logo-ball" cx="29" cy="12" r="5" fill="var(--ball)" stroke="var(--bg)" stroke-width="1.5"/>
+      </svg>
+      <h1>Bullseye</h1>
+    </div>
+    <nav class="tabs" role="tablist" aria-label="Scoring mode">
       <button role="tab" id="tab-live" aria-selected="true">Live</button>
       <button role="tab" id="tab-clip" aria-selected="false">Slo-mo clip</button>
     </nav>
   </header>
 
-  <section id="board" aria-live="polite">
-    <div class="total"><span id="total">0</span><small>points</small></div>
-    <div class="stats">
-      <div><b id="shots">0</b><small>shots</small></div>
-      <div><b id="hits">0</b><small>on target</small></div>
-      <div><b id="last">–</b><small>last</small></div>
+  <section id="board" class="board" aria-live="polite">
+    <div class="score">
+      <span class="label">Score</span>
+      <span id="total" class="digits">0</span>
     </div>
+    <dl class="stats">
+      <div><dt>Shots</dt><dd id="shots">0</dd></div>
+      <div><dt>Hit rate</dt><dd id="hitrate">–</dd></div>
+      <div><dt>Best</dt><dd id="best">–</dd></div>
+      <div><dt>Streak</dt><dd id="streak">0</dd></div>
+    </dl>
+    <ol id="string" class="string" aria-label="Shot string"></ol>
   </section>
 
   <main>
-    <section id="pane-live">
-      <div class="viewer">
+    <section id="pane-live" class="pane">
+      <div id="viewer" class="viewer">
         <video id="video" playsinline muted></video>
-        <canvas id="overlay"></canvas>
-        <div id="live-hint" class="hint">Point the camera at the target and tap Start.<br>
-          Pinch or use the slider to zoom so the target fills the view. Hold it steady (a tripod
-          is best). Live scoring runs at 60 fps, so a shot can land one ring off; score the
-          slo-mo clip for the exact count.</div>
+        <canvas id="overlay" aria-hidden="true"></canvas>
+        <canvas id="fx" aria-hidden="true"></canvas>
+        <div id="pops" class="pops" aria-hidden="true"></div>
+
+        <div class="hud" aria-hidden="true">
+          <div class="hud-score"><span id="hud-total" class="digits">0</span><span class="hud-unit">pts</span></div>
+          <div class="hud-meta">
+            <span class="live-dot">Live</span>
+            <span><b id="hud-shots">0</b> shots</span>
+            <span><b id="hud-streak">0</b> streak</span>
+          </div>
+          <div id="hud-last" class="hud-last"></div>
+        </div>
+
+        <div class="viewer-tools">
+          <button id="btn-sound" class="chip-btn" aria-pressed="true" title="Hit sounds">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path class="wave" d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <span>Sound</span>
+          </button>
+          <button id="btn-overlay" class="chip-btn" aria-pressed="false" title="Full-screen overlay with hit markers">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="3.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3 3h5M3 3v5M21 3h-5M21 3v5M3 21h5M3 21v-5M21 21h-5M21 21v-5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <span>Overlay</span>
+          </button>
+        </div>
+
+        <div id="live-hint" class="hint">
+          <b>Aim the camera at the target, then tap Start.</b>
+          Pinch or slide to zoom until the target fills the view. Turn on <b>Overlay</b> for a
+          full-screen scoreboard you can read from the shooting line. Live scoring runs at 60 fps,
+          so a shot can land one ring off; score the slo-mo clip for the exact count.
+        </div>
       </div>
-      <div class="zoom-row">
-        <select id="lens" aria-label="Camera lens" hidden></select>
-        <input id="zoom" type="range" min="1" max="4" step="0.05" value="1" aria-label="Zoom" disabled>
-        <output id="zoom-val" for="zoom">1.0×</output>
+
+      <div class="live-controls">
+        <div class="zoom-row">
+          <select id="lens" aria-label="Camera lens" hidden></select>
+          <input id="zoom" type="range" min="1" max="4" step="0.05" value="1" aria-label="Zoom" disabled>
+          <output id="zoom-val" for="zoom">1.0×</output>
+        </div>
+        <div class="controls">
+          <button id="btn-live" class="big primary" disabled>Start</button>
+          <button id="btn-reset-live" class="big">Reset</button>
+          <button id="btn-exit-overlay" class="big" hidden>Exit overlay</button>
+        </div>
+        <p class="status" id="live-status">Loading scorer…</p>
       </div>
-      <div class="controls">
-        <button id="btn-live" class="primary" disabled>Start</button>
-        <button id="btn-reset-live">Reset</button>
-      </div>
-      <p class="status" id="live-status">Loading scorer…</p>
     </section>
 
-    <section id="pane-clip" hidden>
-      <p class="lead">Record a round with the Camera app in <b>Slo-Mo</b>, then pick the clip here.
-        Every frame is scored on this phone, so this is the accurate count.
-        If the picker shows <b>Options</b>, choose the original/current format so the full frame rate is kept.</p>
-      <div class="controls">
-        <label class="primary file">Choose slo-mo video
-          <input id="file" type="file" accept="video/*" disabled>
-        </label>
-        <select id="rate" aria-label="Slo-mo capture rate">
-          <option value="240" selected>240 fps slo-mo</option>
-          <option value="120">120 fps slo-mo</option>
-        </select>
-      </div>
-      <div id="clip-progress" hidden>
-        <progress id="prog" max="1" value="0"></progress>
-        <div class="controls"><span id="clip-status" class="status"></span>
-          <button id="btn-cancel">Cancel</button></div>
+    <section id="pane-clip" class="pane" hidden>
+      <div class="clip-card">
+        <div class="clip-art" aria-hidden="true">
+          <svg viewBox="0 0 64 64"><rect x="6" y="14" width="52" height="36" rx="7" fill="none" stroke="currentColor" stroke-width="3"/><path d="M27 25v14l12-7z" fill="currentColor"/><path d="M6 22h52M6 42h52" stroke="currentColor" stroke-width="2" stroke-dasharray="3 4"/></svg>
+        </div>
+        <div>
+          <h2>Score a slo-mo clip</h2>
+          <p class="lead">Record a round in the Camera app's <b>Slo-Mo</b> mode, then pick the clip.
+            Every frame is checked on this phone, so this is the exact count.
+            If the picker shows <b>Options</b>, keep the original format so the full frame rate survives.</p>
+        </div>
+        <div class="controls">
+          <label class="big primary file">Choose slo-mo video
+            <input id="file" type="file" accept="video/*" disabled>
+          </label>
+          <select id="rate" aria-label="Slo-mo capture rate">
+            <option value="240" selected>240 fps</option>
+            <option value="120">120 fps</option>
+          </select>
+        </div>
+        <div id="clip-progress" hidden>
+          <div class="meter"><div id="prog-bar"></div></div>
+          <div class="controls"><span id="clip-status" class="status"></span>
+            <button id="btn-cancel">Cancel</button></div>
+        </div>
       </div>
     </section>
 
     <section id="list-wrap">
-      <h2>Shots</h2>
-      <ol id="list" reversed></ol>
+      <h2 class="section-title">Shots <span id="list-count"></span></h2>
+      <ol id="list"></ol>
+      <p id="list-empty" class="empty">No shots yet. Hits show up here with a snapshot of where the ball landed.</p>
     </section>
   </main>
 
