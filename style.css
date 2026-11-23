@@ -67,18 +67,22 @@ h1 { font-family: var(--display); font-weight: 400; font-size: 22px; margin: 0; 
   padding: 14px 16px 12px; border-radius: var(--radius);
   background: linear-gradient(160deg, var(--panel-hi), var(--panel) 60%);
   border: 1px solid var(--line);
-  display: grid; grid-template-columns: auto 1fr; gap: 6px 18px; align-items: center;
+  display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; align-items: center;
   box-shadow: 0 10px 30px rgba(0, 0, 0, .35);
 }
 .score { display: flex; flex-direction: column; min-width: 7ch; }
 .label, .stats dt, .hud-meta, .section-title {
   text-transform: uppercase; letter-spacing: .12em; font-size: 11px; color: var(--muted); font-weight: 700;
 }
-#total { font-size: 56px; line-height: 1; color: var(--ball); text-shadow: 0 0 22px rgba(231, 244, 60, .25); }
+#total { font-size: 56px; line-height: 1; white-space: nowrap; color: var(--ball); text-shadow: 0 0 22px rgba(231, 244, 60, .25); }
 #total.bump { animation: bump .5s cubic-bezier(.3, 1.8, .5, 1); }
 @keyframes bump { 35% { transform: scale(1.14); } }
-.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 0; text-align: center; }
-.stats dd { margin: 2px 0 0; font-family: var(--display); font-size: 20px; }
+.stats {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; margin: 0;
+  padding-left: 16px; border-left: 1px solid var(--line);
+}
+.stats dt { white-space: nowrap; }
+.stats dd { margin: 1px 0 0; font-family: var(--display); font-size: 20px; line-height: 1.1; white-space: nowrap; }
 .string {
   grid-column: 1 / -1; list-style: none; margin: 8px 0 0; padding: 0;
   display: flex; gap: 5px; overflow-x: auto; scrollbar-width: none; min-height: 30px;
@@ -97,11 +101,11 @@ h1 { font-family: var(--display); font-weight: 400; font-size: 22px; margin: 0; 
 main { padding: 0 max(16px, env(safe-area-inset-right, 0px)) 40px max(16px, env(safe-area-inset-left, 0px)); }
 .viewer {
   position: relative; background: #000; border-radius: var(--radius); overflow: hidden;
-  aspect-ratio: 9 / 16; max-height: 64vh; max-width: 100%; margin: 0 auto; touch-action: none;
+  height: var(--fit-h, min(60vh, 150vw)); width: var(--fit-w, auto); min-height: 280px; margin: 0 auto; touch-action: none;
   border: 1px solid var(--line);
 }
 .viewer video, .viewer canvas, .pops { position: absolute; inset: 0; width: 100%; height: 100%; }
-.viewer video { object-fit: contain; transform-origin: 50% 50%; }
+.viewer video { object-fit: cover; transform-origin: 50% 50%; }
 .pops { pointer-events: none; overflow: hidden; }
 .viewer-tools { position: absolute; top: 10px; right: 10px; display: flex; gap: 8px; z-index: 3; }
 .chip-btn {
@@ -118,12 +122,21 @@ main { padding: 0 max(16px, env(safe-area-inset-right, 0px)) 40px max(16px, env(
 }
 .hint b:first-child { display: block; font-size: 16px; margin-bottom: 4px; color: var(--paper); }
 
-.zoom-row { display: flex; align-items: center; gap: 10px; margin: 14px 0 0; }
-.zoom-row select { padding: 8px 10px; font-size: 15px; }
-.zoom-row input[type="range"] { flex: 1; min-width: 0; accent-color: var(--ball); height: 28px; }
-.zoom-row input:disabled { opacity: .35; }
-.zoom-row output { min-width: 3.4em; text-align: right; font-family: var(--display); font-size: 14px; color: var(--muted); }
+.zoom-row {
+  position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 3;
+  display: flex; align-items: center; gap: 10px; padding: 4px 14px 4px 6px; border-radius: 999px;
+  border: 1px solid rgba(244, 234, 214, .25); background: rgba(21, 17, 14, .62);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+}
+.zoom-row[hidden] { display: none; }
+.zoom-row select { padding: 6px 10px; font-size: 14px; border-radius: 999px; background: rgba(44, 35, 28, .9); }
+.zoom-row input[type="range"] { flex: 1; min-width: 0; margin-left: 8px; accent-color: var(--ball); height: 30px; }
+.zoom-row select:not([hidden]) + input[type="range"] { margin-left: 0; }
+.zoom-row output { min-width: 3.2em; text-align: right; font-family: var(--display); font-size: 14px; color: var(--paper); }
 .controls { display: flex; gap: 10px; align-items: center; margin: 12px 0 4px; flex-wrap: wrap; }
+.live-controls .controls button { flex: 1 1 0; white-space: nowrap; }
+body.overlay .live-controls .controls button { flex: 1 1 auto; padding-left: 12px; padding-right: 12px; }
+.live-controls #btn-live { flex-grow: 2; }
 button, .file, select {
   border-radius: 14px; border: 1px solid var(--line); background: var(--panel); padding: 11px 18px; font-size: 16px;
 }
@@ -151,7 +164,12 @@ button:disabled, .file:has(input:disabled) { opacity: .45; }
 body.overlay { overflow: hidden; }
 body.overlay .topbar, body.overlay .board, body.overlay #list-wrap, body.overlay .hint { display: none; }
 body.overlay .viewer {
-  position: fixed; inset: 0; z-index: 20; border-radius: 0; border: 0; max-height: none; aspect-ratio: auto;
+  position: fixed; inset: 0; z-index: 20; border-radius: 0; border: 0; height: auto; width: auto; min-height: 0;
+}
+body.overlay .viewer video { object-fit: contain; }
+body.overlay .zoom-row {
+  left: max(16px, env(safe-area-inset-left, 0px)); right: max(16px, env(safe-area-inset-right, 0px));
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 132px);
 }
 body.overlay .hud {
   display: grid; grid-template-columns: 1fr auto; align-items: start; gap: 4px 12px;
@@ -172,7 +190,7 @@ body.overlay .hud {
 }
 .hud-last:empty { display: none; }
 .hud-last.fresh { animation: bump .5s cubic-bezier(.3, 1.8, .5, 1); }
-body.overlay .viewer-tools { top: auto; bottom: calc(env(safe-area-inset-bottom, 0px) + 196px); right: max(16px, env(safe-area-inset-right, 0px)); }
+body.overlay .viewer-tools { top: auto; bottom: calc(env(safe-area-inset-bottom, 0px) + 186px); right: max(16px, env(safe-area-inset-right, 0px)); }
 body.overlay .live-controls {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
   padding: 30px max(16px, env(safe-area-inset-right, 0px)) calc(env(safe-area-inset-bottom, 0px) + 12px) max(16px, env(safe-area-inset-left, 0px));
@@ -265,5 +283,4 @@ body.overlay .status { color: #cfc2ab; }
 /* wide screens: keep the phone-shaped column centred */
 @media (min-width: 720px) {
   .topbar, .board, main { max-width: 640px; margin-left: auto; margin-right: auto; }
-  body.overlay .viewer video { object-fit: contain; }
 }

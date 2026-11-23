@@ -123,10 +123,11 @@ function addShot(shot, thumb) {
 function ordinalRing(zone) { return ['Centre', 'Inner', '2nd', '3rd', '4th', '5th', 'Outer'][zone] || 'Outer'; }
 
 // ------------------------------------------------------------ hit effects
-/** Working-frame coordinates -> CSS pixels inside the viewer (video is object-fit: contain). */
+/** Working-frame coordinates -> CSS pixels inside the viewer (preview is object-fit cover, or contain in overlay mode). */
 function viewPoint(x, y, sh) {
   const r = $('viewer').getBoundingClientRect();
-  const s = Math.min(r.width / live.w, r.height / live.h);
+  const fit = getComputedStyle($('video')).objectFit === 'cover' ? Math.max : Math.min;
+  const s = fit(r.width / live.w, r.height / live.h);
   const ox = (r.width - live.w * s) / 2, oy = (r.height - live.h * s) / 2;
   const k = (zoom.native ? 1 : zoom.value) / ((sh && sh.zoomAt) || 1);
   return [ox + (live.w / 2 + (x - live.w / 2) * k) * s, oy + (live.h / 2 + (y - live.h / 2) * k) * s, s * k];
@@ -254,8 +255,41 @@ function setOverlay(on) {
   document.body.classList.toggle('overlay', on);
   $('btn-overlay').setAttribute('aria-pressed', on);
   try { localStorage.setItem('overlay', on ? 'on' : 'off'); } catch (e) { /* private mode */ }
+  fitViewer();
   requestAnimationFrame(drawOverlay);
 }
+
+// ------------------------------------------------------------ live layout
+/** Size the camera view to the room left between the scoreboard and the
+ * controls, so Start is on screen without scrolling. Uses the small viewport
+ * height, so Safari's toolbar sliding in and out doesn't resize it. */
+const vhProbe = document.createElement('div');
+vhProbe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:100vh;height:100svh;visibility:hidden;pointer-events:none';
+document.body.append(vhProbe);
+function fitViewer() {
+  const v = $('viewer');
+  if ($('pane-live').hidden || document.body.classList.contains('overlay')) return;
+  const vr = v.getBoundingClientRect(), status = $('live-status');
+  const below = status.getBoundingClientRect().bottom + parseFloat(getComputedStyle(status).marginBottom) - vr.bottom;
+  const safeBottom = parseFloat(getComputedStyle(document.body).paddingBottom) || 0;
+  const room = vhProbe.offsetHeight - (vr.top + window.scrollY) - below - safeBottom - 6;
+  const full = v.parentElement.clientWidth;
+  const h = Math.round(Math.max(280, Math.min(room, (full * 16) / 9)));
+  // the preview fills the box (object-fit: cover); narrow the box rather than crop away more than ~40% of the picture
+  const w = live.w && live.h ? Math.min(full, Math.round(h * (live.w / live.h) * 1.6)) : full;
+  setVar(v, '--fit-h', h + 'px');
+  setVar(v, '--fit-w', w < full ? w + 'px' : '');
+}
+function setVar(el, name, value) {
+  if (el.style.getPropertyValue(name) === value) return;
+  if (value) el.style.setProperty(name, value); else el.style.removeProperty(name);
+}
+if (window.ResizeObserver) {
+  const ro = new ResizeObserver(() => fitViewer());
+  ['.topbar', '#board', '.live-controls'].forEach((q) => ro.observe(document.querySelector(q)));
+}
+window.addEventListener('resize', fitViewer);
+document.fonts?.ready.then(fitViewer);
 $('btn-overlay').onclick = () => setOverlay(!document.body.classList.contains('overlay'));
 $('btn-exit-overlay').onclick = () => setOverlay(false);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && document.body.classList.contains('overlay')) setOverlay(false); });
@@ -339,6 +373,7 @@ function setMode(m) {
   $('tab-clip').setAttribute('aria-selected', m === 'clip');
   $('pane-live').hidden = m !== 'live';
   $('pane-clip').hidden = m !== 'clip';
+  fitViewer();
   // overlay mode belongs to the live camera; come back to it with the Live tab
   if (m === 'clip') document.body.classList.remove('overlay');
   else if (savedOverlay()) setOverlay(true);
@@ -381,6 +416,7 @@ function setupZoom(track) {
   const slider = $('zoom');
   slider.min = zoom.min; slider.max = zoom.max; slider.step = 0.05;
   slider.disabled = false;
+  $('zoom-row').hidden = false;
   const saved = parseFloat(store.get('zoom'));
   setZoom(Number.isFinite(saved) ? saved : zoom.value);
 }
@@ -541,6 +577,7 @@ function sizeWork() {
   if (!live.canvas) live.canvas = document.createElement('canvas');
   live.canvas.width = live.w; live.canvas.height = live.h;
   live.ctx = live.canvas.getContext('2d', { willReadFrequently: true });
+  fitViewer();
 }
 
 async function beginLive() {
@@ -601,11 +638,10 @@ function onAnimFrame() {
 function statusLoop() {
   if (!live.running) return;
   const sec = (performance.now() - live.t0) / 1000;
-  setStatus(`Camera ${live.captureFps} fps · scoring ${(live.frames / sec).toFixed(0)} fps` +
-    (sensors.enabled ? ' · motion sensors on' : '') +
-    ` · ${live.procMs.toFixed(1)} ms/frame${live.dropped ? ` · ${live.dropped} skipped` : ''}` +
-    (zoom.native ? ' · lens zoom' : zoom.value > 1.001 ? ' · cropped zoom' : '') +
-    (measureReady ? '' : ' · ring reader still loading'));
+  setStatus(`Scoring ${(live.frames / sec).toFixed(0)} of ${live.captureFps} fps` +
+    ` · ${live.procMs.toFixed(1)} ms${live.dropped ? ` · ${live.dropped} skipped` : ''}` +
+    (sensors.enabled ? ' · motion on' : '') +
+    (measureReady ? '' : ' · ring reader loading'));
   setTimeout(statusLoop, 500);
 }
 function stopLive() {
@@ -617,6 +653,7 @@ function stopLive() {
   video.removeAttribute('src');
   video.style.transform = '';
   $('zoom').disabled = true;
+  $('zoom-row').hidden = true;
   live.wakeLock?.release?.();
   $('btn-live').textContent = 'Start';
   $('steady').hidden = true;

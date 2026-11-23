@@ -77,20 +77,21 @@
           </button>
         </div>
 
-        <div id="live-hint" class="hint">
-          <b>Aim the camera at the target, then tap Start.</b>
-          Pinch or slide to zoom until the target fills the view. Turn on <b>Overlay</b> for a
-          full-screen scoreboard you can read from the shooting line. Live scoring runs at 60 fps,
-          so a shot can land one ring off; score the slo-mo clip for the exact count.
-        </div>
-      </div>
-
-      <div class="live-controls">
-        <div class="zoom-row">
+        <div id="zoom-row" class="zoom-row" hidden>
           <select id="lens" aria-label="Camera lens" hidden></select>
           <input id="zoom" type="range" min="1" max="4" step="0.05" value="1" aria-label="Zoom" disabled>
           <output id="zoom-val" for="zoom">1.0×</output>
         </div>
+
+        <div id="live-hint" class="hint">
+          <b>Aim at the target, then tap Start.</b>
+          Pinch to zoom until the target fills the view. <b>Overlay</b> gives a full-screen
+          scoreboard you can read from the shooting line. Live runs at 60 fps, so a shot can
+          land one ring off; a slo-mo clip gives the exact count.
+        </div>
+      </div>
+
+      <div class="live-controls">
         <div class="controls">
           <button id="btn-live" class="big primary" disabled>Start</button>
           <button id="btn-reset-live" class="big">Reset</button>
