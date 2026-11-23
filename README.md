@@ -3,7 +3,7 @@
 Scores Nerf-ball shots at a paper bullseye (rings 10–60, centre 100) from your iPhone, entirely in the browser.
 
 - **Live** – point the camera at the target; each hit is scored as it lands (60 fps, so a shot can be one ring off). Zoom with the slider, a pinch, or the lens picker. **Overlay** turns the screen into a full-size scoreboard with the rings tinted in score colours and every hit marked.
-- **Game** – two players take turns: one shoots while the other holds the phone and films, then they swap, for as many rounds as you pick. The shooter scores the rings; whoever films scores up to 20 a ball, half for holding the picture steady (motion sensors plus the picture's own shake) and half for keeping the target centred and filling the view at each hit.
+- **Game** – two players take turns: one shoots while the other holds the phone and films, then they swap, for as many rounds as you pick. A turn is a set number of hits on the paper (missed it, or no beep? shoot again). Each hit pays the shooter its ring and whoever films up to 20: half for how steady the picture was in the 1.5 s before the hit (motion sensors plus the picture's own shake, judged as if at 1× zoom), half for having the target centred and filling the view. Jolts cost the filmer 5; a false hit can be struck out by tapping its chip; ending a turn early takes two taps and can be undone.
 - **Slo-mo clip** – record a round in the Camera app's Slo-Mo mode and pick the clip; every frame is scored on the phone. This is the accurate count.
 
 To keep it on your Home Screen: open the page in Safari, tap Share, then Add to Home Screen. It then opens full screen like an app and works offline.

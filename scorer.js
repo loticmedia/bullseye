@@ -25,6 +25,7 @@
   const WORK_SHORT = 540;
   const SIG_SCALE = 0.5;
   const FIND_SCALE = 0.5;
+  const LOCATE_SCALE = 0.125; // coarse target search for the framing score
   const BALL_INDEX_MIN = 25;
   const MIN_BLOB_AREA = 15;
   const MAX_BLOBS = 8;
@@ -58,6 +59,7 @@
       sensorVeto: 20,
       sensorHold: Math.max(3, Math.round(24 * r)),
       sensorMoving: 4,
+      preWin: Math.max(8, Math.round(1.5 * captureFps)), // picture speed kept for the 1.5 s before an impact
     };
     p.buffer = p.lookahead - p.refOffsets[0] + 2;
     p.histKeep = p.buffer + 4;
@@ -422,6 +424,10 @@
       this.finder = null;
       this.prevGray = null; this.prevProf = null;
       this.lastDiff = 0;
+      // picture speed per frame (px/s: sensors or image shake, whichever is larger; -1 = too fast to
+      // measure), so each impact job can carry the 1.5 s before it (the 2-player steadiness score)
+      this.captureFps = captureFps;
+      this.speed = new Float32Array(this.P.preWin + this.P.lookahead + 8);
     }
 
     /** Push one RGBA frame at working resolution. Returns measurement jobs that became ready. */
@@ -464,6 +470,12 @@
       }
       this.prevGray = gray; this.prevProf = prof;
       this.lastDiff = this.diff.get(i);
+      // picture speed in px/s: sensors (px per capture frame × rate) or image shake over the real gap
+      // since the previous frame (frames can be skipped when the phone is busy)
+      const mp = meta && Number.isFinite(meta.motionPx) ? meta.motionPx : 0;
+      const dt = meta && meta.dt > 0 ? meta.dt : 1 / this.captureFps;
+      this.lastSpeed = this.lastShake === null ? -1 : Math.max(mp * this.captureFps, this.lastShake / dt);
+      this.speed[i % this.speed.length] = this.lastSpeed;
 
       const bl = this.finder.find(rgba);
       this.tracker.update(i, bl);
@@ -523,8 +535,10 @@
       const cur = this.frames.get(t);
       let sensor = null; // strongest phone movement around the impact, if sensors report
       for (let k = t - 3; k <= t + 1; k++) if (this.motion.has(k)) sensor = Math.max(sensor || 0, this.motion.get(k));
+      const pre = new Float32Array(Math.min(P.preWin, t + 1));
+      for (let k = 0; k < pre.length; k++) pre[k] = this.speed[(t - pre.length + 1 + k) % this.speed.length];
       return { t, time: t / this.fps, W: this.W, H: this.H, settled, cands, refs, cur: cur ? cur.slice() : null,
-        moving: sensor !== null && sensor > P.sensorMoving };
+        moving: sensor !== null && sensor > P.sensorMoving, pre };
     }
   }
 
@@ -605,8 +619,10 @@
       return m;
     }
 
-    function findTarget(ref, prior) {
-      const sc = FIND_SCALE;
+    /** opt.scale: search resolution (default FIND_SCALE); opt.localMin: accept a local
+     * (prior-based) match at this confidence; opt.localOnly: never fall back to a full search. */
+    function findTarget(ref, prior, opt = {}) {
+      const sc = opt.scale || FIND_SCALE;
       const small = new cv.Mat();
       cv.resize(ref, small, new cv.Size(0, 0), sc, sc, cv.INTER_AREA);
       const H = small.rows, W = small.cols, short = Math.min(H, W);
@@ -638,9 +654,9 @@
         const pcx = Math.round(prior[0] * sc), pcy = Math.round(prior[1] * sc);
         const local = search(Math.max(rLo, Math.round(0.88 * pr)), Math.min(rHi, Math.round(1.12 * pr) + 1),
           Math.max(0, pcx - m), Math.max(0, pcy - m), Math.min(W - 1, pcx + m), Math.min(H - 1, pcy + m));
-        if (local && local[3] >= Math.max(0.45, 0.8 * prior[3])) out = local;
+        if (local && local[3] >= (opt.localMin ?? Math.max(0.45, 0.8 * prior[3]))) out = local;
       }
-      if (!out) out = search(rLo, rHi);
+      if (!out && !(opt.localOnly && prior)) out = search(rLo, rHi);
       del(padded, res);
       return out;
     }
@@ -885,7 +901,7 @@
     }
 
     class Measurer {
-      constructor() { this.targetPrior = null; this.nShots = 0; }
+      constructor() { this.targetPrior = null; this.locPrior = null; this.nShots = 0; }
 
       /** Score one impact job; returns a shot object or null (no target / no ball). */
       measure(job) {
@@ -934,6 +950,7 @@
             fit_q: zr.q, settled: job.settled, center: [cx, cy], R, target_conf: conf,
             ball: [c.x, c.y], impact: [bx, by], work: [job.W, job.H],
             cand: { dt: c.dt, age: c.age, brk: c.brk, area: c.area }, motion,
+            pre: job.pre, // picture speed (px/s) over the 1.5 s before impact (2-player steadiness)
           };
           if (note) shot.note = note;
           return shot;
@@ -945,6 +962,24 @@
 
       /** RGB cv.Mat of a job's impact frame (caller deletes), e.g. for thumbnails. */
       impactFrame(job) { return job.cur ? rgbFromRgba(job.cur, job.W, job.H) : null; }
+
+      /** Where the target is in one RGBA frame: [cx, cy, R, conf], or null when it isn't in view.
+       * Used for the 2-player framing score; keeps its own search prior so it can't disturb shots. */
+      locate(rgba, W, H) {
+        const ref = rgbFromRgba(rgba, W, H);
+        try {
+          // coarse (1/8 size) is plenty for framing; a full search at most every 2 s if the target is lost
+          const now = Date.now(), full = !this.locPrior && now - (this.locFullAt || 0) > 2000;
+          if (!this.locPrior && !full) return null;
+          if (full) this.locFullAt = now;
+          const tgt = findTarget(ref, this.locPrior, { scale: LOCATE_SCALE, localMin: 0.35, localOnly: !full });
+          if (!tgt || tgt[3] < 0.35) { this.locPrior = null; return null; }
+          this.locPrior = tgt;
+          return tgt;
+        } finally {
+          ref.delete();
+        }
+      }
     }
     return Measurer;
   }

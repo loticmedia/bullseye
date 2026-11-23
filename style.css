@@ -66,6 +66,7 @@ h1 { font-family: var(--display); font-weight: 400; font-size: 22px; margin: 0; 
   .tabs button { padding: 8px 10px; }
 }
 .tabs button[aria-selected="true"] { background: var(--paper); color: var(--ink); }
+.tabs button:disabled { opacity: .35; }
 
 /* ------------------------------------------------------------- scoreboard */
 .board {
@@ -101,13 +102,17 @@ h1 { font-family: var(--display); font-weight: 400; font-size: 22px; margin: 0; 
 }
 .string li.key { color: var(--ink); opacity: .35; animation: none; }
 .string li.miss { background: transparent !important; border: 2px dashed var(--z7); color: var(--z7); }
+.string li:not(.key) { cursor: pointer; }
+.string li.void { opacity: .4; text-decoration: line-through 2px; }
+#list li.void { opacity: .45; }
+#list li.void .pts { text-decoration: line-through 2px; }
 @keyframes chip-in { from { transform: scale(.3); opacity: 0; } }
 
 /* -------------------------------------------------------------- live pane */
 main { padding: 0 max(16px, env(safe-area-inset-right, 0px)) 40px max(16px, env(safe-area-inset-left, 0px)); }
 .viewer {
   position: relative; background: #000; border-radius: var(--radius); overflow: hidden;
-  height: var(--fit-h, min(60vh, 150vw)); width: var(--fit-w, auto); min-height: 280px; margin: 0 auto; touch-action: none;
+  height: var(--fit-h, min(60vh, 150vw)); width: var(--fit-w, auto); min-height: 220px; margin: 0 auto; touch-action: none;
   border: 1px solid var(--line);
 }
 .viewer video, .viewer canvas, .pops { position: absolute; inset: 0; width: 100%; height: 100%; }
@@ -115,7 +120,7 @@ main { padding: 0 max(16px, env(safe-area-inset-right, 0px)) 40px max(16px, env(
 #fx { z-index: 5; }
 .viewer video { object-fit: cover; transform-origin: 50% 50%; }
 .pops { pointer-events: none; overflow: hidden; }
-.viewer-tools { position: absolute; top: 10px; right: 10px; display: flex; gap: 8px; z-index: 3; }
+.viewer-tools { position: absolute; top: 10px; right: 10px; display: flex; gap: 8px; z-index: 6; }
 .chip-btn {
   display: inline-flex; align-items: center; gap: 6px; padding: 7px 11px; border-radius: 999px;
   border: 1px solid rgba(244, 234, 214, .25); background: rgba(21, 17, 14, .62); color: var(--paper);
@@ -145,6 +150,7 @@ main { padding: 0 max(16px, env(safe-area-inset-right, 0px)) 40px max(16px, env(
 .live-controls .controls button { flex: 1 1 0; white-space: nowrap; }
 body.overlay .live-controls .controls button { flex: 1 1 auto; padding-left: 12px; padding-right: 12px; }
 .live-controls #btn-live, .live-controls #btn-game { flex-grow: 2; }
+button, .file, select { touch-action: manipulation; }
 button, .file, select {
   border-radius: 14px; border: 1px solid var(--line); background: var(--panel); padding: 11px 18px; font-size: 16px;
 }
@@ -296,6 +302,7 @@ body.overlay .status { color: #cfc2ab; }
 /* ----------------------------------------------------------- 2-player game */
 body:not(.game) .game-only, body:not(.game) .game-head, body:not(.game) .hud-game { display: none !important; }
 body.game .solo-only, body.game .board .score, body.game .board .stats, body.game .hint { display: none !important; }
+body.game[data-gphase="setup"] #board, body.game[data-gphase="over"] #board { display: none; } /* the card says it all */
 .game-head { grid-column: 1 / -1; display: grid; gap: 8px; }
 .players { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .player {
@@ -312,19 +319,16 @@ body.game .solo-only, body.game .board .score, body.game .board .stats, body.gam
 .player.shoot .role { background: var(--ball); color: var(--ink); }
 .player.film .role { background: var(--z5); color: var(--ink); }
 .pname { font-family: var(--display); font-size: 16px; letter-spacing: .03em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.2; }
-.pname small {
-  font-family: var(--body); font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase;
-  color: var(--muted); margin-left: 8px; vertical-align: 2px;
-}
-.player.shoot .pname small { color: var(--ball); }
-.player.film .pname small { color: var(--z5); }
+.psplit b { font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; margin-right: 6px; }
+.player.shoot .psplit b { color: var(--ball); }
+.player.film .psplit b { color: var(--z5); }
 .ptotal { grid-row: 1 / span 2; grid-column: 3; font-size: 28px; line-height: 1; }
 .player.lead .ptotal { color: var(--ball); text-shadow: 0 0 18px rgba(231, 244, 60, .3); }
 .psplit { grid-column: 2; display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .psplit svg { width: 12px; height: 12px; }
 .psplit i { width: 8px; }
 .turnline {
-  display: flex; justify-content: space-between; gap: 10px; padding: 0 2px;
+  display: flex; justify-content: space-between; gap: 10px; padding: 0 2px; white-space: nowrap;
   text-transform: uppercase; letter-spacing: .12em; font-size: 11px; color: var(--muted); font-weight: 700;
 }
 .hud-game { grid-column: 1 / -1; font-size: 13px; font-weight: 700; color: var(--paper); letter-spacing: .03em; }
@@ -344,6 +348,15 @@ body.game .solo-only, body.game .board .score, body.game .board .stats, body.gam
 .g-strip .m { text-transform: uppercase; letter-spacing: .1em; font-size: 10px; font-weight: 700; color: var(--muted); }
 .g-strip .m b { display: block; font-size: 20px; letter-spacing: 0; color: var(--paper); line-height: 1.1; }
 .g-strip .who { margin-left: auto; text-align: right; max-width: 34%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.g-say { flex: 1; min-width: 0; line-height: 1.3; }
+.g-say > b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.g-say + .m { text-align: right; }
+.g-warn {
+  display: inline-block; margin-top: 4px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 800;
+  letter-spacing: .06em; text-transform: uppercase; color: var(--ink); background: var(--z1);
+}
+.g-strip > .g-warn { position: absolute; top: -12px; right: 12px; margin: 0; }
+.pop.cam { font-size: 22px; -webkit-text-stroke-width: 1.5px; }
 .g-strip.good { border-color: var(--z6); } .g-strip.good > svg { color: var(--z6); }
 .g-strip.ok { border-color: var(--z0); } .g-strip.ok > svg { color: var(--z0); }
 .g-strip.bad { border-color: var(--z2); } .g-strip.bad > svg { color: var(--z2); }
@@ -351,7 +364,7 @@ body.game .solo-only, body.game .board .score, body.game .board .stats, body.gam
 /* full cards over the camera view: setup, turn results, final score */
 .game-card {
   position: absolute; inset: 0; z-index: 4; overflow-y: auto; touch-action: pan-y; display: flex; flex-direction: column;
-  padding: 18px; background: radial-gradient(120% 80% at 50% 0%, rgba(48, 38, 30, .95), rgba(16, 12, 10, .96));
+  padding: 54px 18px 18px; /* clear of the Sound / Overlay buttons */ background: radial-gradient(120% 80% at 50% 0%, rgba(48, 38, 30, .95), rgba(16, 12, 10, .96));
 }
 .game-card[hidden] { display: none; }
 .g-inner { margin: auto 0; }
@@ -378,9 +391,11 @@ body.game .solo-only, body.game .board .score, body.game .board .stats, body.gam
 .g-line.shoot .g-pts { color: var(--ball); }
 .g-line.film .g-pts { color: var(--z5); }
 .game-card .g-next { margin: 16px 0 0; font-size: 15px; }
+.game-card .g-early { margin: 8px 0 0; padding: 8px 12px; border-radius: 12px; background: rgba(255, 143, 58, .16); color: #ffd2ad; font-size: 13px; }
+.game-card .g-tip { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
 .g-next b { font-family: var(--display); font-weight: 400; letter-spacing: .03em; }
 .game-card .g-winner {
-  font-size: 34px; color: var(--z0); margin: 6px 0 12px; -webkit-text-stroke: 1px var(--ink); paint-order: stroke fill;
+  overflow-wrap: anywhere; font-size: clamp(26px, 8.5vw, 34px); color: var(--z0); margin: 6px 0 12px; -webkit-text-stroke: 1px var(--ink); paint-order: stroke fill;
   text-shadow: 0 4px 0 rgba(0, 0, 0, .45);
 }
 .g-final { width: 100%; border-collapse: collapse; margin: 0 0 12px; }
@@ -396,7 +411,7 @@ body.game .solo-only, body.game .board .score, body.game .board .stats, body.gam
 .g-awards { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; font-size: 13px; color: #e5dac6; }
 .g-awards b { font-family: var(--display); font-weight: 400; color: var(--paper); letter-spacing: .03em; }
 body.overlay .game-card {
-  padding-top: calc(env(safe-area-inset-top, 0px) + 18px); padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 150px);
+  padding-top: calc(env(safe-area-inset-top, 0px) + 18px); padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 236px);
 }
 body.overlay .g-strip { display: none !important; }
 body.game #btn-exit-overlay { display: none !important; } /* the Overlay button above does it; three buttons don't fit */

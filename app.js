@@ -27,12 +27,15 @@ const clipRun = { active: false, jobsTotal: null, jobsDone: 0, info: '', ms: 0, 
 const board = { shots: [], shown: 0 };
 function resetBoard(keepList) {
   board.shots = [];
-  if (!keepList) $('list').innerHTML = '';
+  if (!keepList) {
+    $('list').querySelectorAll('img[src^="blob:"]').forEach((im) => URL.revokeObjectURL(im.src));
+    $('list').innerHTML = '';
+  }
   renderBoard(true);
   drawOverlay();
 }
 function stats() {
-  const s = board.shots, hits = s.filter((x) => x.score > 0);
+  const s = board.shots.filter((x) => !x.void), hits = s.filter((x) => x.score > 0);
   let streak = 0;
   for (let i = s.length - 1; i >= 0 && s[i].score > 0; i--) streak++;
   return {
@@ -80,16 +83,19 @@ function renderBoard(instant) {
     for (const sh of board.shots) {
       const li = document.createElement('li');
       if (sh.score) { li.textContent = sh.score; li.style.background = ZONE_COLORS[sh.zone]; } else { li.className = 'miss'; li.textContent = '×'; }
+      if (sh.void) li.classList.add('void');
+      li.title = sh.void ? 'Struck out: tap to count it again' : 'Not a real hit? Tap to strike it out';
       str.append(li);
     }
     str.scrollLeft = str.scrollWidth;
   }
-  const last = board.shots[board.shots.length - 1], hl = $('hud-last');
+  const last = board.shots.filter((x) => !x.void).pop(), hl = $('hud-last');
   hl.textContent = last ? (last.score || 'MISS') : '';
   hl.style.background = last ? (last.score ? ZONE_COLORS[last.zone] : 'var(--panel-hi)') : '';
   hl.style.color = last && !last.score ? 'var(--z7)' : '';
-  $('list-count').textContent = board.shots.length ? `· ${board.shots.length}` : '';
-  $('list-empty').hidden = board.shots.length > 0;
+  const listed = $('list').querySelectorAll('li:not(.void)').length;
+  $('list-count').textContent = listed ? `· ${listed}` : '';
+  $('list-empty').hidden = $('list').children.length > 0;
 }
 function fmtTime(sec) {
   const m = Math.floor(sec / 60), r = sec - 60 * m;
@@ -117,12 +123,24 @@ function addShot(shot, thumb) {
   pts.textContent = shot.score || 'miss';
   if (shot.score) pts.style.background = ZONE_COLORS[shot.zone];
   li.append(edge, img, meta, pts);
+  shot.li = li;
   $('list').prepend(li);
   renderBoard();
   const hl = $('hud-last'); hl.classList.remove('fresh'); void hl.offsetWidth; hl.classList.add('fresh');
   drawOverlay();
   celebrate(shot);
 }
+/** Tap a chip in the shot string to strike out a false hit (tap again to restore it). */
+$('string').addEventListener('click', (e) => {
+  const li = e.target.closest('li');
+  if (!li || li.classList.contains('key')) return;
+  const shot = board.shots[[...$('string').children].indexOf(li)];
+  if (!shot) return;
+  if (mode === 'game') { if (!game.toggleVoid(shot)) return; } else shot.void = !shot.void;
+  if (shot.li) shot.li.classList.toggle('void', !!shot.void);
+  renderBoard();
+  drawOverlay();
+});
 function ordinalRing(zone) { return ['Centre', 'Inner', '2nd', '3rd', '4th', '5th', 'Outer'][zone] || 'Outer'; }
 
 // ------------------------------------------------------------ hit effects
@@ -212,7 +230,7 @@ const sound = {
     if (!this.on) return;
     try {
       this.ctx = this.ctx || new (window.AudioContext || window.webkitAudioContext)();
-      if (this.ctx.state === 'suspended') this.ctx.resume();
+      if (this.ctx.state !== 'running') this.ctx.resume();
     } catch (e) { this.ctx = null; }
   },
   hit(score) {
@@ -285,7 +303,8 @@ function fitViewer() {
   const full = v.parentElement.clientWidth;
   const h = Math.round(Math.max(280, Math.min(room, (full * 16) / 9)));
   // the preview fills the box (object-fit: cover); narrow the box rather than crop away more than ~40% of the picture
-  const w = live.w && live.h ? Math.min(full, Math.round(h * (live.w / live.h) * 1.6)) : full;
+  const cardUp = document.body.classList.contains('g-card'); // a game card covers the view: use the width
+  const w = live.w && live.h && !cardUp ? Math.min(full, Math.round(h * (live.w / live.h) * 1.6)) : full;
   setVar(v, '--fit-h', h + 'px');
   setVar(v, '--fit-w', w < full ? w + 'px' : '');
 }
@@ -353,9 +372,14 @@ measureWorker.onmessage = (e) => {
     case 'ready':
       measureReady = true;
       if (!live.running) setStatus(readyText());
+      if (mode === 'game') game.paint();
       break;
     case 'error': showError(m.message); break;
-    case 'shot': if (mode === 'game') game.onShot(m.shot, m.thumb); else addShot(m.shot, m.thumb); break;
+    case 'shot':
+      if (m.shot.epoch !== live.epoch) break; // from an earlier scoring session
+      if (mode === 'game') game.onShot(m.shot, m.thumb); else addShot(m.shot, m.thumb);
+      break;
+    case 'located': if (mode === 'game') game.onLocated(m); break;
     case 'job-done': clipRun.jobsDone++; checkClipDone(); break;
   }
 };
@@ -379,6 +403,7 @@ measureWorker.onerror = (e) => showError('measure worker: ' + e.message);
 function setMode(m) {
   if (m === mode) return;
   if (live.running) stopLive();
+  live.startToken++; live.epoch++;
   if (mode === 'game') game.leave();
   mode = m;
   store.set('mode', m);
@@ -403,6 +428,9 @@ const live = {
   running: false, stream: null, canvas: null, ctx: null, w: 0, h: 0,
   outstanding: 0, procMs: 0, frames: 0, dropped: 0, t0: 0, captureFps: 60, wakeLock: null,
   gen: 0, // bumped on every start/stop so a frame loop from an earlier run can't keep going
+  epoch: 0, // scoring session: shots carry it, and only the current session's count
+  startToken: 0, starting: null, // camera start in progress (see startLive)
+  lastMT: null, lastPF: null, // media time / presented-frame count of the last frame sent
 };
 const video = $('video');
 
@@ -514,11 +542,17 @@ $('lens').onchange = async () => {
   if (live.running && !params.get('demo')) await openCamera($('lens').value);
 };
 
+/** Magnification of the working frame relative to the main lens at 1x (lens choice × zoom). */
+function viewZoom() {
+  const name = $('lens').selectedOptions[0]?.textContent || '';
+  return (/tele/i.test(name) ? 5 : /ultra/i.test(name) ? 0.5 : 1) * zoom.value;
+}
+
 // ---------------------------------------------------------- motion sensors
 // The gyroscope tells us when the phone itself moves, so camera jiggle is not mistaken
 // for the paper flapping on a hit. Converted to "how far the picture slides per frame".
 const sensors = {
-  enabled: false, peakDeg: 0, peakAcc: 0, movingUntil: 0,
+  enabled: false, peakDeg: 0, peakAcc: 0, movingUntil: 0, lastEvent: -1e9, quietSince: 0,
   /** Must run inside a tap handler: iOS asks the user once. */
   request() {
     const DME = window.DeviceMotionEvent;
@@ -528,7 +562,11 @@ const sensors = {
       this.enabled = true;
       window.addEventListener('devicemotion', (e) => {
         const r = e.rotationRate || {}, a = e.acceleration || {};
+        if (r.alpha == null && r.beta == null) return; // no gyroscope (e.g. a desktop browser)
         const pitchYaw = Math.hypot(r.beta || 0, r.gamma || 0), roll = Math.abs(r.alpha || 0);
+        const now = performance.now();
+        this.lastEvent = now;
+        if (pitchYaw + roll > 0.25) this.quietSince = now; // hand tremor is well above this
         this.peakDeg = Math.max(this.peakDeg, pitchYaw + 0.35 * roll); // deg/s
         this.peakAcc = Math.max(this.peakAcc, Math.hypot(a.x || 0, a.y || 0, a.z || 0)); // m/s^2
       });
@@ -539,12 +577,15 @@ const sensors = {
       listen();
     }
   },
+  /** Phone lying still on something (gyro below hand tremor for 2 s): the game asks for hand-held. */
+  resting() {
+    const now = performance.now();
+    return this.enabled && now - this.lastEvent < 500 && now - this.quietSince > 2000;
+  },
   /** Image slide (working px) since the last call, for one frame at `fps`. */
   take(fps) {
     if (!this.enabled) return undefined;
-    const lens = /tele/i.test($('lens').selectedOptions[0]?.textContent || '') ? 5
-      : /ultra/i.test($('lens').selectedOptions[0]?.textContent || '') ? 0.5 : 1;
-    const pxPerDeg = 12.5 * lens * zoom.value; // ~43° across the 540 px short side at 1x
+    const pxPerDeg = 12.5 * viewZoom(); // ~43° across the 540 px short side at 1x
     let px = (this.peakDeg / Math.max(fps, 1)) * pxPerDeg;
     if (this.peakAcc > 1.5) px = Math.max(px, 99); // a tap or bump on the phone
     this.peakDeg = 0; this.peakAcc = 0;
@@ -566,6 +607,12 @@ async function openCamera(deviceId) {
   video.srcObject = stream;
   await video.play();
   const track = stream.getVideoTracks()[0];
+  track.addEventListener('ended', () => {
+    if (live.stream !== stream || document.visibilityState !== 'visible') return; // reopened on return
+    stopLive();
+    setStatus('The camera stopped.');
+    if (mode === 'game') game.paint();
+  });
   const settings = track.getSettings();
   live.captureFps = Math.round(settings.frameRate || 30);
   sizeWork();
@@ -573,16 +620,36 @@ async function openCamera(deviceId) {
   listLenses(settings.deviceId);
 }
 
-async function startLive() {
-  if (!frameReady) return;
-  if (params.get('demo')) return startDemo(params.get('demo'), +(params.get('capture') || 240));
-  try {
-    await openCamera(store.get('lens'));
-  } catch (err) {
-    setStatus('Camera unavailable: ' + err.message);
-    return;
-  }
-  beginLive();
+/** Open the camera and start scoring. Only one start runs at a time; a start overtaken by
+ * Stop, a tab switch or another start (live.startToken changed) shuts its camera again. */
+function startLive() {
+  if (!frameReady) return Promise.resolve();
+  if (live.starting) return live.starting;
+  const token = ++live.startToken, m0 = mode;
+  const stale = () => token !== live.startToken || mode !== m0;
+  live.starting = (async () => {
+    try {
+      if (params.get('demo')) await startDemo(params.get('demo'), +(params.get('capture') || 240));
+      else await openCamera(store.get('lens'));
+    } catch (err) {
+      if (!stale()) setStatus('Camera unavailable: ' + err.message);
+      return;
+    }
+    if (stale()) { closeCamera(); return; }
+    await beginLive();
+  })().finally(() => { live.starting = null; });
+  return live.starting;
+}
+function closeCamera() {
+  if (live.stream) live.stream.getTracks().forEach((t) => t.stop());
+  live.stream = null;
+  video.srcObject = null;
+  video.removeAttribute('src');
+}
+/** Start a fresh scoring session in the frame worker; shots from earlier sessions are dropped. */
+function restartScoring() {
+  frameWorker.postMessage({ type: 'live-start', captureFps: live.captureFps, epoch: ++live.epoch });
+  live.lastMT = live.lastPF = null;
 }
 
 /** Working frame size from the video's current size (short side WORK_SHORT). */
@@ -601,16 +668,34 @@ async function beginLive() {
   live.outstanding = 0; live.frames = 0; live.dropped = 0; live.t0 = performance.now();
   live.running = true;
   resetBoard(mode === 'game'); // a game keeps its shot list across turns
-  frameWorker.postMessage({ type: 'live-start', captureFps: live.captureFps });
+  restartScoring();
   $('btn-live').textContent = 'Stop';
   $('live-hint').hidden = true;
+  await startFrameLoop();
+}
+async function startFrameLoop() {
   const gen = ++live.gen;
-  try { live.wakeLock = await navigator.wakeLock?.request('screen'); } catch (e) { /* optional */ }
-  if (gen !== live.gen) return; // stopped meanwhile
-  if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(() => onVideoFrame(gen));
+  let lock = null;
+  try { lock = await navigator.wakeLock?.request('screen'); } catch (e) { /* optional */ }
+  if (gen !== live.gen || !live.running) { lock?.release?.(); return; } // stopped meanwhile
+  live.wakeLock?.release?.();
+  live.wakeLock = lock;
+  if (video.requestVideoFrameCallback) video.requestVideoFrameCallback((now, m) => onVideoFrame(gen, m));
   else requestAnimationFrame(() => onAnimFrame(gen));
   statusLoop(gen);
 }
+// iOS stops the camera (and drops the wake lock) while the app is in the background: resume both
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState === 'hidden' && mode === 'game') { game.onHidden(); return; }
+  if (document.visibilityState !== 'visible' || !live.running || !live.stream) return;
+  const track = live.stream.getVideoTracks()[0];
+  try {
+    if (!track || track.readyState !== 'live' || track.muted) await openCamera(store.get('lens'));
+    startFrameLoop();
+  } catch (e) {
+    setStatus('Camera unavailable: ' + e.message);
+  }
+});
 
 /** Live pipeline fed from a video file instead of the camera (for testing). */
 async function startDemo(url, captureFps) {
@@ -621,11 +706,19 @@ async function startDemo(url, captureFps) {
   live.stream = null;
   live.captureFps = captureFps;
   setupZoom(null);
-  beginLive();
 }
 
-function grabFrame() {
+function grabFrame(meta) {
   if (live.outstanding >= 2) { live.dropped++; return; } // worker is behind: skip rather than lag
+  // real seconds since the previous frame sent (a slo-mo demo file has one capture frame per frame)
+  let dt = 1 / live.captureFps;
+  if (meta && params.get('demo')) {
+    if (live.lastPF != null && meta.presentedFrames > live.lastPF) dt = (meta.presentedFrames - live.lastPF) / live.captureFps;
+    live.lastPF = meta.presentedFrames;
+  } else if (meta) {
+    if (live.lastMT != null && meta.mediaTime > live.lastMT) dt = Math.min(meta.mediaTime - live.lastMT, 0.25);
+    live.lastMT = meta.mediaTime;
+  }
   const vw = video.videoWidth, vh = video.videoHeight;
   if (!vw || !vh) return;
   if (Math.abs(vw / vh - live.w / live.h) > 0.01) sizeWork(); // camera changed orientation/size
@@ -638,14 +731,18 @@ function grabFrame() {
   const img = live.ctx.getImageData(0, 0, live.w, live.h);
   live.outstanding++;
   live.frames++;
+  if (mode === 'game' && game.wantsLocate()) {
+    const copy = img.data.slice();
+    measureWorker.postMessage({ type: 'locate', buffer: copy.buffer, width: live.w, height: live.h }, [copy.buffer]);
+  }
   const motionPx = sensors.take(live.captureFps);
-  frameWorker.postMessage({ type: 'frame', buffer: img.data.buffer, width: live.w, height: live.h, motionPx }, [img.data.buffer]);
+  frameWorker.postMessage({ type: 'frame', buffer: img.data.buffer, width: live.w, height: live.h, motionPx, dt }, [img.data.buffer]);
   $('steady').hidden = performance.now() > sensors.movingUntil;
 }
-function onVideoFrame(gen) {
+function onVideoFrame(gen, meta) {
   if (!live.running || gen !== live.gen) return;
-  grabFrame();
-  video.requestVideoFrameCallback(() => onVideoFrame(gen));
+  grabFrame(meta);
+  video.requestVideoFrameCallback((now, m) => onVideoFrame(gen, m));
 }
 let lastVideoTime = -1;
 function onAnimFrame(gen) {
@@ -664,12 +761,9 @@ function statusLoop(gen) {
 }
 function stopLive() {
   live.running = false;
-  live.gen++;
+  live.gen++; live.startToken++;
   frameWorker.postMessage({ type: 'live-stop' });
-  if (live.stream) live.stream.getTracks().forEach((t) => t.stop());
-  live.stream = null;
-  video.srcObject = null;
-  video.removeAttribute('src');
+  closeCamera();
   video.style.transform = '';
   $('zoom').disabled = true;
   $('zoom-row').hidden = true;
@@ -682,7 +776,7 @@ function stopLive() {
 $('btn-live').onclick = () => { sound.unlock(); if (!live.running) sensors.request(); return live.running ? stopLive() : startLive(); };
 $('btn-reset-live').onclick = () => {
   resetBoard();
-  if (live.running) frameWorker.postMessage({ type: 'live-start', captureFps: live.captureFps });
+  if (live.running) restartScoring();
 };
 
 /** Overlay mode: tint the real target's rings in score colours and mark every hit. */
@@ -733,7 +827,7 @@ $('file').onchange = () => {
   $('clip-status').textContent = 'Reading video…';
   $('file').disabled = true;
   Object.assign(clipRun, { active: true, jobsTotal: null, jobsDone: 0, cancelled: false });
-  frameWorker.postMessage({ type: 'clip', file, captureFps: +$('rate').value });
+  frameWorker.postMessage({ type: 'clip', file, captureFps: +$('rate').value, epoch: ++live.epoch });
   $('file').value = '';
 };
 $('btn-cancel').onclick = () => frameWorker.postMessage({ type: 'cancel' });

@@ -3,13 +3,15 @@
  * to the measure worker over a MessagePort.
  *
  * In:  {type:'init', port}                      MessagePort to measure-worker
- *      {type:'live-start', captureFps}
- *      {type:'frame', buffer, width, height}    RGBA at working size (transferred)
+ *      {type:'live-start', captureFps, epoch}
+ *      {type:'frame', buffer, width, height, motionPx, dt}    RGBA at working size (transferred);
+ *                                               dt: real seconds since the previous frame sent
  *      {type:'live-stop'}
- *      {type:'clip', file, captureFps}
+ *      {type:'clip', file, captureFps, epoch}
  *      {type:'cancel'}
  * Out: {type:'ready'} | {type:'error', message}
- *      {type:'frame-done', ms, shake, motionPx}   shake: picture slide (working px) or null
+ *      {type:'frame-done', ms, speed, vetoed}   speed: picture speed (working px/s, -1 = too fast to
+ *                                               measure); vetoed: spikes dropped for jolts so far
  *      {type:'clip-info', frames, fps, width, height, codec}
  *      {type:'progress', done, total, ms}
  *      {type:'clip-done', jobs, cancelled, ms}
@@ -19,6 +21,7 @@
 importScripts('scorer.js', 'vendor/mp4box.all.min.js');
 
 let port = null, lut = null, scorer = null, cancelled = false, jobsSent = 0;
+let epoch = 0; // scoring session from the page; stamped on every job so stale shots can be dropped
 
 const ready = fetch('ball_lut.bin')
   .then((r) => { if (!r.ok) throw new Error('ball_lut.bin: HTTP ' + r.status); return r.arrayBuffer(); })
@@ -26,6 +29,7 @@ const ready = fetch('ball_lut.bin')
 
 function sendJobs(jobs) {
   for (const job of jobs) {
+    job.epoch = epoch;
     const transfer = job.refs.map((r) => r.rgba.buffer);
     if (job.cur) transfer.push(job.cur.buffer);
     port.postMessage({ type: 'job', job }, transfer);
@@ -170,16 +174,18 @@ onmessage = async (e) => {
     if (msg.type === 'live-start') {
       scorer = new Bullseye.ShotScorer({ fps: msg.captureFps, captureFps: msg.captureFps, lut });
       jobsSent = 0;
+      epoch = msg.epoch || 0;
       port.postMessage({ type: 'reset' });
     } else if (msg.type === 'frame') {
       if (!scorer) return;
       const t0 = performance.now();
-      sendJobs(scorer.push(new Uint8Array(msg.buffer), msg.width, msg.height, { motionPx: msg.motionPx }));
-      postMessage({ type: 'frame-done', ms: performance.now() - t0, shake: scorer.lastShake, motionPx: msg.motionPx });
+      sendJobs(scorer.push(new Uint8Array(msg.buffer), msg.width, msg.height, { motionPx: msg.motionPx, dt: msg.dt }));
+      postMessage({ type: 'frame-done', ms: performance.now() - t0, speed: scorer.lastSpeed, vetoed: scorer.vetoed });
     } else if (msg.type === 'live-stop') {
       if (scorer) sendJobs(scorer.finish());
       scorer = null;
     } else if (msg.type === 'clip') {
+      epoch = msg.epoch || 0;
       port.postMessage({ type: 'reset' });
       await scoreClip(msg);
     } else if (msg.type === 'cancel') {

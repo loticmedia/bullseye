@@ -3,9 +3,11 @@
  *
  * In:  {type:'init', port}            MessagePort from frame-worker
  *      via port: {type:'reset'} | {type:'job', job}
+ *      {type:'locate', buffer, width, height, id}   one RGBA frame: where is the target? (2-player framing)
  * Out: {type:'ready'} | {type:'error', message}
  *      {type:'shot', shot, thumb}     thumb: JPEG Blob of the target with the ball marked
  *      {type:'job-done'}              one per job (shot or not), for progress accounting
+ *      {type:'located', id, target, width, height}   target: [cx, cy, R, conf] or null
  */
 /* global cv, Bullseye */
 'use strict';
@@ -63,6 +65,7 @@ function onPortMessage(e) {
     try {
       const shot = measurer.measure(msg.job);
       if (shot) {
+        shot.epoch = msg.job.epoch;
         const frame = measurer.impactFrame(msg.job);
         const thumb = await thumbnail(shot, frame);
         if (frame) frame.delete();
@@ -76,6 +79,16 @@ function onPortMessage(e) {
 }
 
 onmessage = async (e) => {
+  if (e.data.type === 'locate') {
+    const { buffer, width, height, id } = e.data;
+    chain = chain.then(async () => {
+      await ready;
+      let target = null;
+      try { target = measurer.locate(new Uint8Array(buffer), width, height); } catch (err) { /* treat as not found */ }
+      postMessage({ type: 'located', id, target, width, height });
+    });
+    return;
+  }
   if (e.data.type !== 'init') return;
   e.data.port.onmessage = onPortMessage;
   try {
