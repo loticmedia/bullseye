@@ -19,14 +19,15 @@ const measureWorker = new Worker('measure-worker.js');
   measureWorker.postMessage({ type: 'init', port: ch.port2 }, [ch.port2]);
 }
 let frameReady = false, measureReady = false;
-let mode = 'live';
+let mode = 'live'; // 'live' | 'game' (both use the camera) | 'clip'
+const cameraMode = () => mode !== 'clip';
 const clipRun = { active: false, jobsTotal: null, jobsDone: 0, info: '', ms: 0, cancelled: false };
 
 // ------------------------------------------------------------- scoreboard
 const board = { shots: [], shown: 0 };
-function resetBoard() {
+function resetBoard(keepList) {
   board.shots = [];
-  $('list').innerHTML = '';
+  if (!keepList) $('list').innerHTML = '';
   renderBoard(true);
   drawOverlay();
 }
@@ -96,7 +97,7 @@ function fmtTime(sec) {
 }
 function addShot(shot, thumb) {
   shot.n = board.shots.length + 1;
-  shot.zoomAt = mode === 'live' && !zoom.native ? zoom.value : 1;
+  shot.zoomAt = cameraMode() && !zoom.native ? zoom.value : 1;
   board.shots.push(shot);
   const li = document.createElement('li');
   if (!shot.score) li.className = 'miss';
@@ -108,7 +109,9 @@ function addShot(shot, thumb) {
   const meta = document.createElement('div');
   meta.className = 'meta';
   const ring = shot.score === 100 ? 'Bullseye' : shot.score ? `${ordinalRing(shot.zone)} ring` : 'Off the rings';
-  meta.innerHTML = `<b>Shot ${shot.n}</b>${ring} · ${fmtTime(shot.time)}${shot.note ? ' · low confidence' : ''}`;
+  const title = document.createElement('b');
+  title.textContent = shot.player ? `${shot.player} · shot ${shot.n}` : `Shot ${shot.n}`;
+  meta.append(title, `${ring} · ${fmtTime(shot.time)}${shot.note ? ' · low confidence' : ''}`);
   const pts = document.createElement('div');
   pts.className = 'pts';
   pts.textContent = shot.score || 'miss';
@@ -144,7 +147,7 @@ function pop(text, color, x, y, layer, cls) {
 function celebrate(shot) {
   const logo = $('logo'); logo.classList.remove('thunk'); void logo.getBoundingClientRect(); logo.classList.add('thunk');
   sound.hit(shot.score);
-  const liveView = mode === 'live' && live.running && live.w;
+  const liveView = cameraMode() && live.running && live.w;
   let layer, x, y;
   if (liveView) {
     layer = $('pops');
@@ -232,12 +235,18 @@ const sound = {
       g.gain.setValueAtTime(0.35, t + 0.05); g.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
       o.connect(g).connect(out); o.start(t + 0.05); o.stop(t + 0.45);
     }
-    const notes = score === 100 ? [523, 659, 784, 1047] : score >= 50 ? [659, 988] : score ? [587] : [];
-    notes.forEach((f, i) => {
-      const o = c.createOscillator(), g = c.createGain(), at = t + 0.08 + i * 0.09;
+    this.notes(score === 100 ? [523, 659, 784, 1047] : score >= 50 ? [659, 988] : score ? [587] : [], t + 0.08);
+  },
+  /** Square-wave notes, one after another (countdown beeps, fanfares). */
+  notes(freqs, at, step = 0.09, len = 0.16) {
+    if (!this.on || !this.ctx) return;
+    const c = this.ctx, out = c.createGain(); out.gain.value = 0.55; out.connect(c.destination);
+    at = at || c.currentTime;
+    freqs.forEach((f, i) => {
+      const o = c.createOscillator(), g = c.createGain(), t0 = at + i * step;
       o.type = 'square'; o.frequency.value = f;
-      g.gain.setValueAtTime(0.0001, at); g.gain.exponentialRampToValueAtTime(0.12, at + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, at + 0.16);
-      o.connect(g).connect(out); o.start(at); o.stop(at + 0.18);
+      g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.12, t0 + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t0 + len);
+      o.connect(g).connect(out); o.start(t0); o.stop(t0 + len + 0.02);
     });
   },
 };
@@ -311,6 +320,7 @@ frameWorker.onmessage = (e) => {
     case 'ready':
       frameReady = true;
       $('btn-live').disabled = false;
+      $('btn-game').disabled = false;
       $('file').disabled = false;
       if (!live.running) setStatus(readyText());
       break;
@@ -318,6 +328,7 @@ frameWorker.onmessage = (e) => {
     case 'frame-done':
       live.outstanding--;
       live.procMs = live.procMs * 0.9 + m.ms * 0.1;
+      if (mode === 'game') game.onFrame(m);
       break;
     case 'clip-info':
       clipRun.info = `${m.frames} frames · ${m.width}×${m.height} · ${m.codec}`;
@@ -344,7 +355,7 @@ measureWorker.onmessage = (e) => {
       if (!live.running) setStatus(readyText());
       break;
     case 'error': showError(m.message); break;
-    case 'shot': addShot(m.shot, m.thumb); break;
+    case 'shot': if (mode === 'game') game.onShot(m.shot, m.thumb); else addShot(m.shot, m.thumb); break;
     case 'job-done': clipRun.jobsDone++; checkClipDone(); break;
   }
 };
@@ -368,25 +379,30 @@ measureWorker.onerror = (e) => showError('measure worker: ' + e.message);
 function setMode(m) {
   if (m === mode) return;
   if (live.running) stopLive();
+  if (mode === 'game') game.leave();
   mode = m;
-  $('tab-live').setAttribute('aria-selected', m === 'live');
-  $('tab-clip').setAttribute('aria-selected', m === 'clip');
-  $('pane-live').hidden = m !== 'live';
+  store.set('mode', m);
+  for (const t of ['live', 'game', 'clip']) $('tab-' + t).setAttribute('aria-selected', m === t);
+  $('pane-live').hidden = m === 'clip'; // the game uses the live camera view
   $('pane-clip').hidden = m !== 'clip';
-  fitViewer();
-  // overlay mode belongs to the live camera; come back to it with the Live tab
+  document.body.classList.toggle('game', m === 'game');
+  // overlay mode belongs to the live camera; come back to it with the Live or Game tab
   if (m === 'clip') document.body.classList.remove('overlay');
   else if (savedOverlay()) setOverlay(true);
   resetBoard();
+  if (m === 'game') game.enter();
+  fitViewer();
 }
 function savedOverlay() { try { return localStorage.getItem('overlay') === 'on'; } catch (e) { return false; } }
 $('tab-live').onclick = () => setMode('live');
+$('tab-game').onclick = () => setMode('game');
 $('tab-clip').onclick = () => setMode('clip');
 
 // ------------------------------------------------------------------- live
 const live = {
   running: false, stream: null, canvas: null, ctx: null, w: 0, h: 0,
   outstanding: 0, procMs: 0, frames: 0, dropped: 0, t0: 0, captureFps: 60, wakeLock: null,
+  gen: 0, // bumped on every start/stop so a frame loop from an earlier run can't keep going
 };
 const video = $('video');
 
@@ -584,14 +600,16 @@ async function beginLive() {
   sizeWork();
   live.outstanding = 0; live.frames = 0; live.dropped = 0; live.t0 = performance.now();
   live.running = true;
-  resetBoard();
+  resetBoard(mode === 'game'); // a game keeps its shot list across turns
   frameWorker.postMessage({ type: 'live-start', captureFps: live.captureFps });
   $('btn-live').textContent = 'Stop';
   $('live-hint').hidden = true;
+  const gen = ++live.gen;
   try { live.wakeLock = await navigator.wakeLock?.request('screen'); } catch (e) { /* optional */ }
-  if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(onVideoFrame);
-  else requestAnimationFrame(onAnimFrame);
-  statusLoop();
+  if (gen !== live.gen) return; // stopped meanwhile
+  if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(() => onVideoFrame(gen));
+  else requestAnimationFrame(() => onAnimFrame(gen));
+  statusLoop(gen);
 }
 
 /** Live pipeline fed from a video file instead of the camera (for testing). */
@@ -624,28 +642,29 @@ function grabFrame() {
   frameWorker.postMessage({ type: 'frame', buffer: img.data.buffer, width: live.w, height: live.h, motionPx }, [img.data.buffer]);
   $('steady').hidden = performance.now() > sensors.movingUntil;
 }
-function onVideoFrame() {
-  if (!live.running) return;
+function onVideoFrame(gen) {
+  if (!live.running || gen !== live.gen) return;
   grabFrame();
-  video.requestVideoFrameCallback(onVideoFrame);
+  video.requestVideoFrameCallback(() => onVideoFrame(gen));
 }
 let lastVideoTime = -1;
-function onAnimFrame() {
-  if (!live.running) return;
+function onAnimFrame(gen) {
+  if (!live.running || gen !== live.gen) return;
   if (video.currentTime !== lastVideoTime) { lastVideoTime = video.currentTime; grabFrame(); }
-  requestAnimationFrame(onAnimFrame);
+  requestAnimationFrame(() => onAnimFrame(gen));
 }
-function statusLoop() {
-  if (!live.running) return;
+function statusLoop(gen) {
+  if (!live.running || gen !== live.gen) return;
   const sec = (performance.now() - live.t0) / 1000;
   setStatus(`Scoring ${(live.frames / sec).toFixed(0)} of ${live.captureFps} fps` +
     ` · ${live.procMs.toFixed(1)} ms${live.dropped ? ` · ${live.dropped} skipped` : ''}` +
     (sensors.enabled ? ' · motion on' : '') +
     (measureReady ? '' : ' · ring reader loading'));
-  setTimeout(statusLoop, 500);
+  setTimeout(() => statusLoop(gen), 500);
 }
 function stopLive() {
   live.running = false;
+  live.gen++;
   frameWorker.postMessage({ type: 'live-stop' });
   if (live.stream) live.stream.getTracks().forEach((t) => t.stop());
   live.stream = null;
@@ -674,7 +693,7 @@ function drawOverlay() {
   cv.width = Math.round(rect.width * dpr); cv.height = Math.round(rect.height * dpr);
   const ctx = cv.getContext('2d');
   ctx.clearRect(0, 0, cv.width, cv.height);
-  if (mode !== 'live' || !document.body.classList.contains('overlay') || !board.shots.length || !live.w) return;
+  if (!cameraMode() || !document.body.classList.contains('overlay') || !board.shots.length || !live.w) return;
   ctx.scale(dpr, dpr);
   const last = board.shots[board.shots.length - 1];
   const [cx, cy, sc] = viewPoint(last.center[0], last.center[1], last);

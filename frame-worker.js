@@ -9,7 +9,7 @@
  *      {type:'clip', file, captureFps}
  *      {type:'cancel'}
  * Out: {type:'ready'} | {type:'error', message}
- *      {type:'frame-done', ms}
+ *      {type:'frame-done', ms, shake, motionPx}   shake: picture slide (working px) or null
  *      {type:'clip-info', frames, fps, width, height, codec}
  *      {type:'progress', done, total, ms}
  *      {type:'clip-done', jobs, cancelled, ms}
@@ -175,7 +175,7 @@ onmessage = async (e) => {
       if (!scorer) return;
       const t0 = performance.now();
       sendJobs(scorer.push(new Uint8Array(msg.buffer), msg.width, msg.height, { motionPx: msg.motionPx }));
-      postMessage({ type: 'frame-done', ms: performance.now() - t0 });
+      postMessage({ type: 'frame-done', ms: performance.now() - t0, shake: scorer.lastShake, motionPx: msg.motionPx });
     } else if (msg.type === 'live-stop') {
       if (scorer) sendJobs(scorer.finish());
       scorer = null;

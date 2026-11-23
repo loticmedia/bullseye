@@ -29,7 +29,8 @@
     </div>
     <nav class="tabs" role="tablist" aria-label="Scoring mode">
       <button role="tab" id="tab-live" aria-selected="true">Live</button>
-      <button role="tab" id="tab-clip" aria-selected="false">Slo-mo clip</button>
+      <button role="tab" id="tab-game" aria-selected="false">Game</button>
+      <button role="tab" id="tab-clip" aria-selected="false">Slo-mo</button>
     </nav>
   </header>
 
@@ -44,6 +45,13 @@
       <div><dt>Best</dt><dd id="best">–</dd></div>
       <div><dt>Streak</dt><dd id="streak">0</dd></div>
     </dl>
+    <div class="game-head">
+      <ol class="players" aria-label="Players">
+        <li class="player" id="gp-0"><span class="role" aria-hidden="true"></span><span class="pname"></span><span class="ptotal digits">0</span><span class="psplit"></span></li>
+        <li class="player" id="gp-1"><span class="role" aria-hidden="true"></span><span class="pname"></span><span class="ptotal digits">0</span><span class="psplit"></span></li>
+      </ol>
+      <div class="turnline"><span id="g-round"></span><span id="g-ball"></span></div>
+    </div>
     <ol id="string" class="string" aria-label="Shot string"></ol>
   </section>
 
@@ -64,6 +72,7 @@
             <span><b id="hud-streak">0</b> streak</span>
           </div>
           <div id="hud-last" class="hud-last"></div>
+          <div id="hud-game" class="hud-game"></div>
         </div>
 
         <div class="viewer-tools">
@@ -82,6 +91,9 @@
           <input id="zoom" type="range" min="1" max="4" step="0.05" value="1" aria-label="Zoom" disabled>
           <output id="zoom-val" for="zoom">1.0×</output>
         </div>
+        <div id="g-strip" class="g-strip game-only" role="status" hidden></div>
+
+        <div id="game-card" class="game-card game-only" hidden></div>
 
         <div id="live-hint" class="hint">
           <b>Aim at the target, then tap Start.</b>
@@ -93,8 +105,10 @@
 
       <div class="live-controls">
         <div class="controls">
-          <button id="btn-live" class="big primary" disabled>Start</button>
-          <button id="btn-reset-live" class="big">Reset</button>
+          <button id="btn-live" class="big primary solo-only" disabled>Start</button>
+          <button id="btn-reset-live" class="big solo-only">Reset</button>
+          <button id="btn-game" class="big primary game-only" disabled>Start game</button>
+          <button id="btn-game-alt" class="big game-only" hidden>Quit</button>
           <button id="btn-exit-overlay" class="big" hidden>Exit overlay</button>
         </div>
         <p class="status" id="live-status">Loading scorer…</p>
@@ -137,5 +151,6 @@
   </main>
 
   <script src="app.js"></script>
+  <script src="game.js"></script>
 </body>
 </html>

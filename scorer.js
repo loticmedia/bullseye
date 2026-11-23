@@ -448,10 +448,13 @@
       const prof = profiles(gray, hw, hh, DIFF_MARGIN);
       if (!this.prevGray) {
         this.shift.set(i, [0, 0]); this.diff.set(i, 0);
+        this.lastShake = 0;
       } else {
         const ms = Math.round(P.maxShake);
         let dx = shift1d(this.prevProf.col, prof.col, DIFF_MARGIN, hw - DIFF_MARGIN, ms);
         let dy = shift1d(this.prevProf.row, prof.row, DIFF_MARGIN, hh - DIFF_MARGIN, ms);
+        // picture slide this frame in working px (null: too big to measure), for the 2-player camera score
+        this.lastShake = dx === null || dy === null || Math.hypot(dx, dy) > P.maxShake ? null : Math.hypot(dx, dy) / SIG_SCALE;
         if (dx === null || dy === null || Math.hypot(dx, dy) > P.maxShake) { dx = 0; dy = 0; }
         if (Math.abs(dx) < 0.05 && Math.abs(dy) < 0.05) { dx = 0; dy = 0; }
         const d = shiftedDiff(this.prevGray, gray, hw, hh, dx, dy, DIFF_MARGIN);
